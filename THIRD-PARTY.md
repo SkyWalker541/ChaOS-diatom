@@ -50,3 +50,40 @@ and, on each device, the system's ALSA and graphics libraries (OpenGL ES and
 EGL), all provided by the system it runs on: on the GKD Pixel 2 and the TrimUI
 Brick that is plastron, whose package list on a card is
 `Licenses/plastron-packages.md`.
+
+## `shaders/pt/` (added in the ChaOS fork)
+
+**PT SkyWalker541**, the pixel transparency shader for Game Boy, Game Boy
+Color and Game Boy Advance, ported from GLSL to C to run on the CPU.
+
+- **Copyright (c) 2026 SkyWalker541**, **MIT**; full text in
+  `shaders/pt/LICENSE`. From https://github.com/SkyWalker541/PT-SkyWalker541
+  (v2.1.0); the original GLSL is kept beside the port.
+- The backing grain's hash is **"Hash without Sine" by David Hoskins**
+  (https://www.shadertoy.com/view/4djSRW), **MIT**, Copyright (c) 2014
+  David Hoskins. Its notice:
+
+  > Permission is hereby granted, free of charge, to any person obtaining a
+  > copy of this software and associated documentation files (the
+  > "Software"), to deal in the Software without restriction, including
+  > without limitation the rights to use, copy, modify, merge, publish,
+  > distribute, sublicense, and/or sell copies of the Software, and to permit
+  > persons to whom the Software is furnished to do so, subject to the
+  > following conditions:
+  >
+  > The above copyright notice and this permission notice shall be included
+  > in all copies or substantial portions of the Software.
+  >
+  > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+  > OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  > MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+  > NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+  > DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+  > OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+  > USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+- LCD Dot mode is inspired by **Themaister's dot shader** (public domain); no
+  code is taken from it.
+
+MIT sits beside diatom's MPL-2.0 as rcheevos does: the files keep their own
+licence.

@@ -1,0 +1,14 @@
+# Build outputs and test pictures
+glref
+ptc
+ptref
+ptref_flat
+ptc_a53
+frames
+refs
+*.ppm
+*.log
+flat.glsl
+fraglight.glsl
+fraglight_real.glsl
+light.glsl
