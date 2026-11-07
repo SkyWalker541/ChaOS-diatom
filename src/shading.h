@@ -18,8 +18,8 @@ void diatom_shading_set_file(const char *path);
  * that sends none next time gets pt.cfg's. */
 void diatom_shading_end(void);
 
-/* Is the shader drawing the running game? Its PT_NPARAMS settings into
- * `params` when it is. */
+/* Which shader (CS_*, shaders/cpu_shader.h) is drawing the running game, 0
+ * for none; its settings into `params` (64 at most) when one is. */
 int diatom_shading_current(float *params);
 
 #endif

@@ -28,7 +28,7 @@
 #ifndef CHAOS_DIATOM_VERSION
 #define CHAOS_DIATOM_VERSION "0.0"   /* from the VERSION file, by the Makefile */
 #endif
-#include "pt_shader.h"
+#include "cpu_shader.h"
 
 /* --- the frame the core last handed us ----------------------------------- */
 static void       *g_frame;
@@ -201,30 +201,30 @@ static diatom_rect      g_dst;   /* locked at load */
  * once per settings change, so one thread is plenty (~25 ms on a Brick). */
 static bool write_shaded(const char *path, diatom_rect *where)
 {
-	float v[PT_NPARAMS];
-	pt_params pp;
-	pt_ctx *c;
+	float v[64];
+	cs_ctx *c = NULL;
+	cs_band *band = NULL;
 	pt_format fmt = { 16, 8, 0, 0 };
 	uint32_t *in = NULL, *out = NULL;
-	int w = g_frame_w, h = g_frame_h, scale, ow, oh, x, y;
+	int w = g_frame_w, h = g_frame_h, scale, ow, oh, x, y, kind;
 	size_t row, pad;
 	unsigned char hdr[54];
 	unsigned size;
 	bool ok = false;
 	FILE *f = NULL;
 
-	if (!path || !*path || !g_frame || w <= 0 || h <= 0 || !diatom_shading_current(v))
+	if (!path || !*path || !g_frame || w <= 0 || h <= 0 || !(kind = diatom_shading_current(v)))
 		return false;
 	scale = g_dst.w / w;
 	if (scale < 1 || g_dst.w != w * scale || g_dst.h != h * scale) return false;
 	ow = w * scale;
 	oh = h * scale;
-	memcpy(pp.v, v, sizeof pp.v);
 
 	in  = malloc((size_t)w * h * sizeof *in);
 	out = malloc((size_t)ow * oh * sizeof *out);
-	c = pt_create();
-	if (!in || !out || !c) goto done;
+	c = cs_create(kind);
+	band = cs_band_create();
+	if (!in || !out || !c || !band) goto done;
 	for (y = 0; y < h; y++) {
 		const unsigned char *src = (const unsigned char *)g_frame + (size_t)y * g_frame_pitch;
 		for (x = 0; x < w; x++) {
@@ -240,8 +240,9 @@ static bool write_shaded(const char *path, diatom_rect *where)
 			in[(size_t)y * w + x] = p;
 		}
 	}
-	pt_set_params(c, &pp);
-	if (pt_render(c, in, w, h, (size_t)w, scale, out, (size_t)ow, &fmt, 0)) goto done;
+	cs_set_params(c, v);
+	if (cs_begin_frame(c, in, w, h, (size_t)w, scale, 0) ||
+	    cs_render_rows(c, band, 0, oh, out, (size_t)ow, &fmt)) goto done;
 
 	if (!(f = fopen(path, "wb"))) goto done;
 	row = (size_t)ow * 3;
@@ -275,7 +276,8 @@ static bool write_shaded(const char *path, diatom_rect *where)
 	if (where) *where = g_dst;
 done:
 	if (f) fclose(f);
-	pt_destroy(c);
+	cs_band_destroy(band);
+	cs_destroy(c);
 	free(in);
 	free(out);
 	return ok;

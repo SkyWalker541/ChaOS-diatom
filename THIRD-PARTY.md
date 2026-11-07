@@ -87,3 +87,28 @@ Color and Game Boy Advance, ported from GLSL to C to run on the CPU.
 
 MIT sits beside diatom's MPL-2.0 as rcheevos does: the files keep their own
 licence.
+
+## `shaders/crt/` (added in the ChaOS fork)
+
+**crt-lottes-fast**, for the NES, SNES, Genesis, Master System and PC Engine,
+ported from GLSL to C to run on the CPU.
+
+- **[CRTS] "PUBLIC DOMAIN CRT-STYLED SCALAR" by Timothy Lottes**
+  (https://www.shadertoy.com/view/MtSfRK), adapted for RetroArch by hunterk,
+  as libretro's glsl-shaders carries it in `crt/shaders/crt-lottes-fast.glsl`
+  (https://github.com/libretro/glsl-shaders, at `1aaabbe`).
+- **The Unlicense** ("aka PUBLIC DOMAIN"), whose full text is in the
+  original's header; the original is kept beside the port as
+  `shaders/crt/crt-lottes-fast.glsl`.
+
+## `shaders/lcd/` (added in the ChaOS fork)
+
+**lcd3x**, for the Game Gear and the Neo Geo Pocket and Pocket Color, ported
+from GLSL to C to run on the CPU.
+
+- **By Gigaherz**, **public domain** (its header: "License: Public domain"),
+  as libretro's glsl-shaders carries it in `handheld/shaders/lcd3x.glsl` (at
+  `1aaabbe`); the original is kept beside the port as `shaders/lcd/lcd3x.glsl`.
+
+Public-domain code sits beside diatom's MPL-2.0 with nothing owed; the
+notices are kept so where the code came from stays plain.

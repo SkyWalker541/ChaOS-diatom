@@ -123,15 +123,18 @@ void diatom_port_overlay(const uint8_t *bgra, int w, int h, unsigned ms);
  * The host chooses (which game gets which shader, and its settings); the port
  * draws, because the shader works in screen space and replaces the port's own
  * scaling. NONE draws frames plainly. PT is SkyWalker541's pixel transparency
- * shader, `params` its PT_NPARAMS values in shaders/pt/pt_shader.h's order;
- * the pointer is read during the call and not kept.
+ * shader, CRT crt-lottes-fast and LCD lcd3x; `params` are the shader's values
+ * in its header's order (shaders/cpu_shader.h names them all); the pointer is
+ * read during the call and not kept.
  *
  * A shader draws only at a whole-number scale with the picture wholly on the
  * surface. Any other frame is drawn plainly, so a port may always fall back,
  * and a port that cannot shade at all may ignore this. */
 typedef enum {
 	DIATOM_SHADER_NONE,
-	DIATOM_SHADER_PT
+	DIATOM_SHADER_PT,
+	DIATOM_SHADER_CRT,
+	DIATOM_SHADER_LCD
 } diatom_shader;
 
 void diatom_port_shader(diatom_shader kind, const float *params, int nparams);
