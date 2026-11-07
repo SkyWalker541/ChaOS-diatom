@@ -99,14 +99,22 @@ static bool             g_page_stale[FB_PAGES];
  * the host (diatom_port_bezel). Outside the picture it never changes, so it is
  * kept once, already laid over black in the framebuffer's own pixels, and
  * that is what a page is wiped to and what the bar, the disc and a notice put
- * back. Inside the picture it is blended over each frame, row by row, only
- * across the span of each row where it is not clear (bezel_spans): for the
- * usual frame-shaped bezel, nothing at all. */
+ * back. Inside the picture it is blended over each frame, in ordinary memory
+ * before the rows are copied to the page - the page is never read back, which
+ * on this framebuffer costs far more than the blend - and only across the
+ * runs of each row where it is not clear (bezel_runs): for a bezel with a
+ * clear window the size of the picture, nothing at all. */
 static const uint8_t *g_bz;
-static uint32_t      *g_bz_bg;
-static int           *g_bz_x0, *g_bz_x1;   /* per panel row, within the rect */
+static uint32_t      *g_bz_bg;      /* the bezel over black: its colour times alpha */
+static uint8_t       *g_bz_ia;      /* per pixel, 255 - alpha */
+static int           *g_bz_row;     /* per panel row + 1: first run in g_bz_run */
+static int           *g_bz_run;     /* x0, x1 pairs, within the picture */
+static size_t         g_bz_run_cap;
+static bool           g_bz_any;     /* any run at all inside the picture */
 static diatom_rect    g_bz_dst;
-static bool           g_bz_spans_ok;
+static bool           g_bz_runs_ok;
+static uint32_t      *g_bz_frame;   /* the shaded picture, before it goes to the page */
+static size_t         g_bz_frame_cap;
 
 /* What a pixel outside the picture is when nothing is on it. */
 #define BG(x, y) (g_bz_bg ? g_bz_bg[(size_t)(y) * g_vinfo.xres + (size_t)(x)] : g_opaque)
@@ -1363,16 +1371,16 @@ bool diatom_port_bezel(const uint8_t *bgra, int w, int h)
 	int p;
 
 	g_bz = NULL;
-	g_bz_spans_ok = false;
+	g_bz_runs_ok = false;
 	if (bgra && (w != (int)W || h != (int)H)) {
 		diatom_port_log(DIATOM_LOG_WARN, "bezel is not the panel's size; ignored");
 		bgra = NULL;
 	}
 	if (bgra) {
 		if (!g_bz_bg) g_bz_bg = malloc(W * H * sizeof *g_bz_bg);
-		if (!g_bz_x0) g_bz_x0 = malloc(H * sizeof *g_bz_x0);
-		if (!g_bz_x1) g_bz_x1 = malloc(H * sizeof *g_bz_x1);
-		if (!g_bz_bg || !g_bz_x0 || !g_bz_x1) {
+		if (!g_bz_ia) g_bz_ia = malloc(W * H);
+		if (!g_bz_row) g_bz_row = malloc((H + 1) * sizeof *g_bz_row);
+		if (!g_bz_bg || !g_bz_ia || !g_bz_row) {
 			diatom_port_log(DIATOM_LOG_WARN, "bezel: no memory; ignored");
 			bgra = NULL;
 		}
@@ -1387,6 +1395,7 @@ bool diatom_port_bezel(const uint8_t *bgra, int w, int h)
 			unsigned a = s[3];
 			g_bz_bg[i] = (((s[2] * a + 127) / 255) << ro) | (((s[1] * a + 127) / 255) << go) |
 			             (((s[0] * a + 127) / 255) << bo) | g_opaque;
+			g_bz_ia[i] = (uint8_t)(255 - a);
 		}
 		g_bz = bgra;
 	}
@@ -1396,64 +1405,81 @@ bool diatom_port_bezel(const uint8_t *bgra, int w, int h)
 	return g_bz != NULL || !asked;
 }
 
-/* Where the bezel is not clear in each row of the picture. */
-static void bezel_spans(diatom_rect dst, int x0, int x1, int y0, int y1)
+/* Where the bezel is not clear in each row of the picture, as runs: a frame
+ * that overlaps the picture's edges is two short runs a row, not the row. */
+static void bezel_runs(diatom_rect dst, int x0, int x1, int y0, int y1)
 {
+	size_t n = 0;
 	int y, x;
 
-	for (y = 0; y < (int)g_vinfo.yres; y++) { g_bz_x0[y] = 0; g_bz_x1[y] = 0; }
-	for (y = y0; y < y1; y++) {
-		const uint8_t *s = g_bz + (size_t)y * g_vinfo.xres * 4;
-		int a = -1, b = -1;
-		for (x = x0; x < x1; x++)
-			if (s[x * 4 + 3]) { if (a < 0) a = x; b = x + 1; }
-		if (a >= 0) { g_bz_x0[y] = a; g_bz_x1[y] = b; }
+	g_bz_any = false;
+	for (y = 0; y <= (int)g_vinfo.yres; y++) g_bz_row[y] = 0;
+	for (y = 0; y < (int)g_vinfo.yres; y++) {
+		g_bz_row[y] = (int)n;
+		if (y < y0 || y >= y1) continue;
+		for (x = x0; x < x1; ) {
+			const uint8_t *ia = g_bz_ia + (size_t)y * g_vinfo.xres;
+			int a;
+
+			while (x < x1 && ia[x] == 255) x++;
+			if (x >= x1) break;
+			a = x;
+			while (x < x1 && ia[x] != 255) x++;
+			if (n + 2 > g_bz_run_cap) {
+				size_t cap = g_bz_run_cap ? g_bz_run_cap * 2 : 4096;
+				int *r = realloc(g_bz_run, cap * sizeof *r);
+				if (!r) { g_bz_runs_ok = false; return; }
+				g_bz_run = r;
+				g_bz_run_cap = cap;
+			}
+			g_bz_run[n++] = a;
+			g_bz_run[n++] = x;
+			g_bz_any = true;
+		}
 	}
+	g_bz_row[g_vinfo.yres] = (int)n;
 	g_bz_dst = dst;
-	g_bz_spans_ok = true;
+	g_bz_runs_ok = true;
 }
 
-/* The bezel over the picture just drawn into the page. Reads the page back,
- * which is slow memory, but only where the bezel covers the picture. The
- * notice's copy of what is underneath gets the same pixels. */
-static void bezel_inside(uint8_t *page, diatom_rect dst, int x0, int x1, int y0, int y1,
-                         bool under, int ux0, int uy0)
+/* Is the bezel to be laid over the picture this frame? Readies its runs. */
+static bool bezel_over(diatom_rect dst, int x0, int x1, int y0, int y1)
+{
+	if (!g_bz) return false;
+	if (!g_bz_runs_ok || memcmp(&dst, &g_bz_dst, sizeof dst))
+		bezel_runs(dst, x0, x1, y0, y1);
+	return g_bz_runs_ok && g_bz_any;
+}
+
+static bool bezel_row_has(int y)
+{
+	return g_bz_row[y + 1] > g_bz_row[y];
+}
+
+/* The bezel over one row of the picture in ordinary memory: `row` is indexed
+ * by panel x less `xoff`. Out = bezel over black + picture * (255 - alpha),
+ * the division by 255 done as (v * 257 + 257) >> 16, exact for these. */
+static void bezel_row(uint32_t *row, int xoff, int y)
 {
 	const unsigned ro = g_vinfo.red.offset, go = g_vinfo.green.offset;
 	const unsigned bo = g_vinfo.blue.offset;
-	int y, x;
+	const uint32_t *bg = g_bz_bg + (size_t)y * g_vinfo.xres;
+	const uint8_t  *ia = g_bz_ia + (size_t)y * g_vinfo.xres;
+	int r, x;
 
-	if (!g_bz) return;
-	if (!g_bz_spans_ok || memcmp(&dst, &g_bz_dst, sizeof dst))
-		bezel_spans(dst, x0, x1, y0, y1);
-	for (y = y0; y < y1; y++) {
-		uint32_t *row;
-		const uint8_t *s;
-		bool band;
-
-		if (g_bz_x1[y] <= g_bz_x0[y]) continue;
-		row = (uint32_t *)(page + (size_t)y * g_finfo.line_length);
-		s = g_bz + (size_t)y * g_vinfo.xres * 4;
-		band = under && y >= uy0 && y < uy0 + g_ov_h;
-		for (x = g_bz_x0[y]; x < g_bz_x1[y]; x++) {
-			const unsigned a = s[x * 4 + 3];
+	for (r = g_bz_row[y]; r < g_bz_row[y + 1]; r += 2)
+		for (x = g_bz_run[r]; x < g_bz_run[r + 1]; x++) {
+			const unsigned k = ia[x];
 			uint32_t p, q;
-			if (!a) continue;
-			if (a == 255) {
-				q = ((uint32_t)s[x * 4 + 2] << ro) | ((uint32_t)s[x * 4 + 1] << go) |
-				    ((uint32_t)s[x * 4] << bo) | g_opaque;
-			} else {
-				p = row[x];
-				q = (((s[x * 4 + 2] * a + ((p >> ro) & 0xff) * (255 - a) + 127) / 255) << ro) |
-				    (((s[x * 4 + 1] * a + ((p >> go) & 0xff) * (255 - a) + 127) / 255) << go) |
-				    (((s[x * 4 + 0] * a + ((p >> bo) & 0xff) * (255 - a) + 127) / 255) << bo) |
-				    g_opaque;
-			}
-			row[x] = q;
-			if (band && x >= ux0 && x < ux0 + g_ov_w)
-				g_ov_under[(size_t)(y - uy0) * (size_t)g_ov_w + (x - ux0)] = q;
+
+			if (!k) { row[x - xoff] = bg[x]; continue; }
+			p = row[x - xoff];
+			q = bg[x];
+			q += ((((p >> ro) & 0xff) * k * 257 + 257) >> 16) << ro;
+			q += ((((p >> go) & 0xff) * k * 257 + 257) >> 16) << go;
+			q += ((((p >> bo) & 0xff) * k * 257 + 257) >> 16) << bo;
+			row[x - xoff] = q;
 		}
-	}
 }
 
 /* Scale-blit src into the destination rect of one page, converting to the
@@ -1553,11 +1579,42 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 	 * Anything else, or a shader that declines, falls through to them. */
 	if (dst.x >= 0 && dst.y >= 0 && dst.x + dst.w <= (int)g_vinfo.xres &&
 	    dst.y + dst.h <= (int)g_vinfo.yres && dst.w % w == 0 && dst.h % h == 0 &&
-	    dst.w / w == dst.h / h &&
+	    dst.w / w == dst.h / h && shade_active() &&
+	    bezel_over(dst, x0, x1, y0, y1)) {
+		/* With the bezel over the picture: shaded into ordinary memory, the
+		 * bezel laid over it there, and the rows copied to the page and to
+		 * the notice's slice of it. Never a read of the page. */
+		size_t need = (size_t)dst.w * (size_t)dst.h;
+
+		if (need > g_bz_frame_cap) {
+			uint32_t *f = realloc(g_bz_frame, need * sizeof *f);
+			if (f) { g_bz_frame = f; g_bz_frame_cap = need; }
+		}
+		if (need <= g_bz_frame_cap &&
+		    shade_frame(src, w, h, pitch, fmt, dst.w / w, g_bz_frame, (size_t)dst.w,
+		                ro, go, bo, opaque)) {
+			for (y = y0; y < y1; y++) {
+				uint32_t *ram = g_bz_frame + (size_t)(y - dst.y) * dst.w;
+				uint32_t *row = (uint32_t *)(page + (size_t)y * g_finfo.line_length);
+
+				if (bezel_row_has(y)) bezel_row(ram, dst.x, y);
+				memcpy(row + dst.x, ram, (size_t)dst.w * sizeof *row);
+				if (under && y >= uy0 && y < uy0 + g_ov_h) {
+					int a = x0 > ux0 ? x0 : ux0, b = x1 < ux0 + g_ov_w ? x1 : ux0 + g_ov_w;
+					if (b > a)
+						memcpy(g_ov_under + (size_t)(y - uy0) * (size_t)g_ov_w + (a - ux0),
+						       ram + (a - dst.x), (size_t)(b - a) * sizeof *row);
+				}
+			}
+			return;
+		}
+	}
+	if (dst.x >= 0 && dst.y >= 0 && dst.x + dst.w <= (int)g_vinfo.xres &&
+	    dst.y + dst.h <= (int)g_vinfo.yres && dst.w % w == 0 && dst.h % h == 0 &&
+	    dst.w / w == dst.h / h && !(g_bz && g_bz_any) &&
 	    shade_frame(src, w, h, pitch, fmt, dst.w / w,
 	                (uint32_t *)(page + (size_t)dst.y * g_finfo.line_length) + dst.x,
 	                g_finfo.line_length / sizeof(uint32_t), ro, go, bo, opaque)) {
-		bezel_inside(page, dst, x0, x1, y0, y1, false, 0, 0);
 		/* What a notice will need to put back, read from the page: the
 		 * shader writes straight to it, with no row in ordinary memory to
 		 * copy from as below. A few rows, while a notice shows. */
@@ -1572,16 +1629,23 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 		return;
 	}
 
+	bezel_over(dst, x0, x1, y0, y1);
 	for (y = y0; y < y1; y++) {
 		diatom_tap ty = g_rowmap[y - dst.y];
 		uint32_t *row = (uint32_t *)(page + (size_t)y * g_finfo.line_length);
 		bool band = under && y >= uy0 && y < uy0 + g_ov_h;
-		uint32_t *out = band ? g_under_row : row;
+		bool bz = g_bz && g_bz_runs_ok && bezel_row_has(y) &&
+		          (int)g_vinfo.xres <= UNDER_ROW_MAX;
+		uint32_t *out = band || bz ? g_under_row : row;
 		const uint32_t *c0 = cache_row(src, pitch, fmt, ty.idx, w);
 		const uint32_t *c1 = ty.w ? cache_row(src, pitch, fmt, ty.idx + 1, w) : NULL;
 
 		if (ty.w) BLIT_ROW_BLEND();
 		else      BLIT_ROW_NEAREST();
+		if (bz) {
+			bezel_row(g_under_row, 0, y);
+			if (!band) memcpy(row + x0, g_under_row + x0, (size_t)(x1 - x0) * sizeof *row);
+		}
 
 		/* Drawn in ordinary memory, then copied to the page and to the
 		 * notice's slice of it - two writes, and never a read of the page. */
@@ -1595,8 +1659,6 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 				       g_under_row + a, (size_t)(b - a) * sizeof *row);
 		}
 	}
-
-	bezel_inside(page, dst, x0, x1, y0, y1, under, ux0, uy0);
 
 	/* Letterbox bars are not repainted per frame: pages start opaque black and
 	 * the rect only shrinks when the user changes mode, which clears them. */
