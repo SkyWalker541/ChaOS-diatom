@@ -86,6 +86,14 @@ static int             g_quit;
 static uint32_t       *g_out;
 static size_t          g_out_pitch;
 static pt_format       g_fmt;
+static void          (*g_hook)(void *ctx, int y0, int y1);
+static void           *g_hook_ctx;
+
+void shade_band_hook(void (*fn)(void *ctx, int y0, int y1), void *ctx)
+{
+	g_hook = fn;
+	g_hook_ctx = ctx;
+}
 
 static void *helper_main(void *arg)
 {
@@ -100,6 +108,7 @@ static void *helper_main(void *arg)
 		pthread_mutex_unlock(&g_mx);
 
 		pt_render_band(g_ctx, hp->band, hp->y0, hp->y1, g_out, g_out_pitch, &g_fmt);
+		if (g_hook) g_hook(g_hook_ctx, hp->y0, hp->y1);
 
 		pthread_mutex_lock(&g_mx);
 		if (--g_left == 0) pthread_cond_signal(&g_done);
@@ -198,13 +207,19 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 	}
 	pthread_mutex_unlock(&g_set_mx);
 
-	if (!g_on || !g_ctx || !src || w <= 0 || h <= 0 || scale < 1) return false;
-	if (!g_own && !(g_own = pt_band_create())) return false;
+	if (!g_on || !g_ctx || !src || w <= 0 || h <= 0 || scale < 1 ||
+	    (!g_own && !(g_own = pt_band_create()))) {
+		g_hook = NULL;
+		return false;
+	}
 	start_helpers();
 
 	t0 = diatom_port_now_us();
-	if (!convert(src, w, h, pitch, fmt)) return false;
-	if (pt_begin_frame(g_ctx, g_buf, w, h, (size_t)w, scale, g_frame++)) return false;
+	if (!convert(src, w, h, pitch, fmt) ||
+	    pt_begin_frame(g_ctx, g_buf, w, h, (size_t)w, scale, g_frame++)) {
+		g_hook = NULL;
+		return false;
+	}
 
 	/* Bands of equal height: the calling thread takes the first. */
 	oh = h * scale;
@@ -225,11 +240,13 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 		pthread_mutex_unlock(&g_mx);
 	}
 	pt_render_band(g_ctx, g_own, 0, oh / nb, out, out_pitch, &g_fmt);
+	if (g_hook) g_hook(g_hook_ctx, 0, oh / nb);
 	if (g_nhelp) {
 		pthread_mutex_lock(&g_mx);
 		while (g_left) pthread_cond_wait(&g_done, &g_mx);
 		pthread_mutex_unlock(&g_mx);
 	}
+	g_hook = NULL;
 	log_timing(diatom_port_now_us() - t0, w, h, scale);
 	return true;
 }

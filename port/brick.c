@@ -1442,6 +1442,41 @@ static void bezel_runs(diatom_rect dst, int x0, int x1, int y0, int y1)
 	g_bz_runs_ok = true;
 }
 
+/* One band of the shaded picture, in ordinary memory, finished: the overlay
+ * laid over it and the rows copied to the page and to the notice's slice of
+ * it. Called by each of the shader's threads on its own rows. */
+typedef struct {
+	uint8_t     *page;
+	diatom_rect  dst;
+	bool         under;
+	int          ux0, uy0, x0, x1;
+} bezel_band_job;
+
+static bool bezel_row_has(int y);
+static void bezel_row(uint32_t *row, int xoff, int y);
+
+static void bezel_band(void *ctx, int r0, int r1)
+{
+	const bezel_band_job *j = ctx;
+	int r;
+
+	for (r = r0; r < r1; r++) {
+		int y = j->dst.y + r;
+		uint32_t *ram = g_bz_frame + (size_t)r * j->dst.w;
+		uint32_t *row = (uint32_t *)(j->page + (size_t)y * g_finfo.line_length);
+
+		if (bezel_row_has(y)) bezel_row(ram, j->dst.x, y);
+		memcpy(row + j->dst.x, ram, (size_t)j->dst.w * sizeof *row);
+		if (j->under && y >= j->uy0 && y < j->uy0 + g_ov_h) {
+			int a = j->x0 > j->ux0 ? j->x0 : j->ux0;
+			int b = j->x1 < j->ux0 + g_ov_w ? j->x1 : j->ux0 + g_ov_w;
+			if (b > a)
+				memcpy(g_ov_under + (size_t)(y - j->uy0) * (size_t)g_ov_w + (a - j->ux0),
+				       ram + (a - j->dst.x), (size_t)(b - a) * sizeof *row);
+		}
+	}
+}
+
 /* Is the bezel to be laid over the picture this frame? Readies its runs. */
 static bool bezel_over(diatom_rect dst, int x0, int x1, int y0, int y1)
 {
@@ -1590,23 +1625,14 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 			uint32_t *f = realloc(g_bz_frame, need * sizeof *f);
 			if (f) { g_bz_frame = f; g_bz_frame_cap = need; }
 		}
-		if (need <= g_bz_frame_cap &&
-		    shade_frame(src, w, h, pitch, fmt, dst.w / w, g_bz_frame, (size_t)dst.w,
-		                ro, go, bo, opaque)) {
-			for (y = y0; y < y1; y++) {
-				uint32_t *ram = g_bz_frame + (size_t)(y - dst.y) * dst.w;
-				uint32_t *row = (uint32_t *)(page + (size_t)y * g_finfo.line_length);
+		if (need <= g_bz_frame_cap) {
+			bezel_band_job job = { page, dst, under, ux0, uy0, x0, x1 };
 
-				if (bezel_row_has(y)) bezel_row(ram, dst.x, y);
-				memcpy(row + dst.x, ram, (size_t)dst.w * sizeof *row);
-				if (under && y >= uy0 && y < uy0 + g_ov_h) {
-					int a = x0 > ux0 ? x0 : ux0, b = x1 < ux0 + g_ov_w ? x1 : ux0 + g_ov_w;
-					if (b > a)
-						memcpy(g_ov_under + (size_t)(y - uy0) * (size_t)g_ov_w + (a - ux0),
-						       ram + (a - dst.x), (size_t)(b - a) * sizeof *row);
-				}
-			}
-			return;
+			/* Each of the shader's threads finishes its own band. */
+			shade_band_hook(bezel_band, &job);
+			if (shade_frame(src, w, h, pitch, fmt, dst.w / w, g_bz_frame, (size_t)dst.w,
+			                ro, go, bo, opaque))
+				return;
 		}
 	}
 	if (dst.x >= 0 && dst.y >= 0 && dst.x + dst.w <= (int)g_vinfo.xres &&
