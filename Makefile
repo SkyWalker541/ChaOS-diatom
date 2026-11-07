@@ -14,7 +14,7 @@ PORT ?= desktop
 
 CC      ?= cc
 CFLAGS  += -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2
-CFLAGS  += -Iinclude -Isrc -Ivendor/rcheevos/include
+CFLAGS  += -Iinclude -Isrc -Iport -Ishaders/pt -Ivendor/rcheevos/include
 # Header dependency tracking. Without it, changing a struct in diatom.h leaves
 # stale objects calling through old member offsets - which on 2026-08-26 turned
 # serialize_size() into a call to a different function entirely and made state
@@ -27,6 +27,9 @@ LDFLAGS += -lz
 # a leftover x86 main.o in a device link fails late and confusingly.
 BUILD := build/$(PORT)
 SRC   := src/main.c src/cheevos.c src/core.c src/env.c src/scale.c src/audio.c src/save.c src/proto.c src/options.c src/zip.c src/levels.c port/$(PORT).c
+# Shaders (ChaOS): the host's choice of shader, the CPU ports' shared drawing,
+# and the shaders themselves
+SRC   += src/shading.c port/shade.c shaders/pt/pt_shader.c
 OBJ   := $(SRC:%.c=$(BUILD)/%.o)
 BIN   := $(BUILD)/diatom
 CONFORM := $(BUILD)/diatom-conform
@@ -57,6 +60,12 @@ RC_OBJ := $(RC_SRC:%.c=$(BUILD)/%.o)
 RC_CFLAGS := -std=gnu11 -O2 -MMD -MP -DRC_DISABLE_LUA \
              -I$(RC_DIR)/include -I$(RC_DIR)/src
 $(RC_OBJ): CFLAGS := $(RC_CFLAGS)
+
+# The shader's per-pixel loops are written to be vectorized (NEON on the
+# Brick), which takes -O3, and its floating-point loops vectorize only without
+# trapping math and errno. -ffp-contract=off keeps its grain identical on every
+# machine: shaders/pt/README.md says why.
+$(BUILD)/shaders/pt/pt_shader.o: CFLAGS += -O3 -fno-trapping-math -fno-math-errno -ffp-contract=off
 
 ifeq ($(PORT),desktop)
   # sdl2-config ships with SDL2 itself; pkg-config is a separate install and is
@@ -147,7 +156,7 @@ $(CHEEVOS_TEST): test/cheevos_test.c src/cheevos.c $(RC_OBJ)
 	@mkdir -p $(BUILD)
 	$(CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 \
 	      -Iinclude -Isrc -I$(RC_DIR)/include -DRC_DISABLE_LUA \
-	      -o $@ test/cheevos_test.c src/cheevos.c $(RC_OBJ)
+	      -o $@ test/cheevos_test.c src/cheevos.c $(RC_OBJ) -lm
 
 # Deliberately NOT part of `check`. It needs a build and it runs in real time -
 # Diatom paces to the core's frame rate, so 300 frames costs five seconds of
@@ -200,11 +209,12 @@ PORT_TEST := $(BUILD)/port-test
 check-port: $(PORT_TEST)
 	@./$(PORT_TEST)
 
-$(PORT_TEST): test/port_test.c port/desktop.c port/port_clock.h include/diatom_port.h
+$(PORT_TEST): test/port_test.c port/desktop.c port/shade.c shaders/pt/pt_shader.c \
+              port/port_clock.h port/shade.h include/diatom_port.h
 	@mkdir -p $(BUILD)
 	$(CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O1 -g \
-	      -Iinclude -Isrc -Iport -o $@ test/port_test.c port/desktop.c \
-	      $(SDL_CFLAGS) $(SDL_LIBS)
+	      -Iinclude -Isrc -Iport -Ishaders/pt -o $@ test/port_test.c port/desktop.c \
+	      port/shade.c shaders/pt/pt_shader.c $(SDL_CFLAGS) $(SDL_LIBS) -lm
 
 # Does core-facts.md still describe the cores we ship? It was measured on the
 # device, which needs the hardware and the user's ROMs; this is the half that

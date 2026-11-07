@@ -1,0 +1,255 @@
+/* Shaders for ports that draw with the CPU (ChaOS). See shade.h.
+ *
+ * One frame, shaded:
+ *
+ *   1. the core's frame is converted once to 0x00RRGGBB, the form the shader
+ *      reads (a GBA frame is 38,400 pixels, so this costs next to nothing);
+ *   2. pt_begin_frame does the per-frame work over the game's pixels;
+ *   3. the screen rows are split into bands, two drawn by helper threads and
+ *      one by the calling thread, and the call returns when all three are done.
+ *
+ * Three bands because the Brick has four cores: one stays with whatever else
+ * runs (the flip thread, sound), and the frame is drawn three times as fast as
+ * on one. The bands give exactly the picture one thread would (test/pt checks
+ * that), so the split is only a matter of speed.
+ *
+ * The call blocks the emulator for the time the shader takes, as the plain
+ * scaler it replaces does. Every SHADE_LOG_EVERY frames the average time goes
+ * to the log, which is how its cost on the device is read.
+ */
+#include "shade.h"
+#include "pt_shader.h"
+
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define SHADE_HELPERS    2
+#define SHADE_LOG_EVERY  600     /* about ten seconds at 60 fps */
+
+/* ---- the host's choice ---------------------------------------------------- */
+
+static pthread_mutex_t g_set_mx = PTHREAD_MUTEX_INITIALIZER;
+static int       g_set_new;          /* a choice not yet taken up */
+static int       g_set_on;
+static pt_params g_set_params;
+static int       g_on;               /* as taken up by the drawing thread */
+
+void shade_set(diatom_shader kind, const float *params, int nparams)
+{
+	char m[96];
+
+	pthread_mutex_lock(&g_set_mx);
+	g_set_on = kind == DIATOM_SHADER_PT && params && nparams == PT_NPARAMS;
+	pt_params_default(&g_set_params);
+	if (g_set_on) memcpy(g_set_params.v, params, sizeof g_set_params.v);
+	g_set_new = 1;
+	pthread_mutex_unlock(&g_set_mx);
+
+	snprintf(m, sizeof m, "shade: %s", g_set_on ? "PT SkyWalker541" : "off");
+	diatom_port_log(DIATOM_LOG_INFO, m);
+}
+
+bool shade_active(void)
+{
+	bool on;
+	pthread_mutex_lock(&g_set_mx);
+	on = g_set_new ? g_set_on : g_on;
+	pthread_mutex_unlock(&g_set_mx);
+	return on;
+}
+
+/* ---- the frame, and the threads drawing it -------------------------------- */
+
+static pt_ctx   *g_ctx;
+static pt_band  *g_own;              /* the calling thread's band */
+static uint32_t *g_buf;              /* the frame as 0x00RRGGBB */
+static size_t    g_buf_cap;
+static unsigned  g_frame;
+
+typedef struct {
+	pthread_t t;
+	pt_band  *band;
+	int       y0, y1;
+	int       started;
+} helper;
+
+static helper          g_help[SHADE_HELPERS];
+static int             g_nhelp;      /* helpers running */
+static pthread_mutex_t g_mx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_go = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t  g_done = PTHREAD_COND_INITIALIZER;
+static unsigned        g_gen;        /* bumped once per frame */
+static int             g_left;       /* helpers still drawing this frame */
+static int             g_quit;
+static uint32_t       *g_out;
+static size_t          g_out_pitch;
+static pt_format       g_fmt;
+
+static void *helper_main(void *arg)
+{
+	helper *hp = arg;
+	unsigned seen = 0;
+
+	for (;;) {
+		pthread_mutex_lock(&g_mx);
+		while (g_gen == seen && !g_quit) pthread_cond_wait(&g_go, &g_mx);
+		if (g_quit) { pthread_mutex_unlock(&g_mx); return NULL; }
+		seen = g_gen;
+		pthread_mutex_unlock(&g_mx);
+
+		pt_render_band(g_ctx, hp->band, hp->y0, hp->y1, g_out, g_out_pitch, &g_fmt);
+
+		pthread_mutex_lock(&g_mx);
+		if (--g_left == 0) pthread_cond_signal(&g_done);
+		pthread_mutex_unlock(&g_mx);
+	}
+}
+
+/* Helpers start on the first shaded frame. Any that will not start leave
+ * their rows to the calling thread: slower, never wrong. */
+static void start_helpers(void)
+{
+	static int tried;
+	int i;
+
+	if (tried) return;
+	tried = 1;
+	for (i = 0; i < SHADE_HELPERS; i++) {
+		g_help[i].band = pt_band_create();
+		if (!g_help[i].band || pthread_create(&g_help[i].t, NULL, helper_main, &g_help[i])) {
+			pt_band_destroy(g_help[i].band);
+			g_help[i].band = NULL;
+			break;
+		}
+		g_help[i].started = 1;
+		g_nhelp++;
+	}
+	if (g_nhelp < SHADE_HELPERS) {
+		char m[80];
+		snprintf(m, sizeof m, "shade: %d of %d helper threads started", g_nhelp, SHADE_HELPERS);
+		diatom_port_log(DIATOM_LOG_WARN, m);
+	}
+}
+
+/* The core's frame as 0x00RRGGBB, padding columns left out. */
+static bool convert(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt)
+{
+	size_t n = (size_t)w * (size_t)h;
+	int x, y;
+
+	if (n > g_buf_cap) {
+		uint32_t *b = realloc(g_buf, n * sizeof *b);
+		if (!b) return false;
+		g_buf = b;
+		g_buf_cap = n;
+	}
+	for (y = 0; y < h; y++) {
+		uint32_t *o = g_buf + (size_t)y * w;
+		if (fmt == DIATOM_PIX_RGB565) {
+			const uint16_t *in = (const uint16_t *)((const uint8_t *)src + (size_t)y * pitch);
+			for (x = 0; x < w; x++) {
+				uint32_t c = in[x];
+				uint32_t r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f;
+				o[x] = (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
+			}
+		} else {
+			const uint32_t *in = (const uint32_t *)((const uint8_t *)src + (size_t)y * pitch);
+			for (x = 0; x < w; x++) o[x] = in[x] & 0x00ffffffu;
+		}
+	}
+	return true;
+}
+
+static void log_timing(uint64_t us, int w, int h, int scale)
+{
+	static uint64_t total, worst;
+	static unsigned count;
+	char m[160];
+
+	total += us;
+	if (us > worst) worst = us;
+	if (++count < SHADE_LOG_EVERY) return;
+	snprintf(m, sizeof m,
+	         "shade: PT %dx%d at %dx, %u frames: %.2f ms average, %.2f ms worst, %d threads",
+	         w, h, scale, count, (double)total / count / 1000.0, (double)worst / 1000.0,
+	         g_nhelp + 1);
+	diatom_port_log(DIATOM_LOG_INFO, m);
+	total = worst = 0;
+	count = 0;
+}
+
+bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
+                 int scale, uint32_t *out, size_t out_pitch,
+                 unsigned r_shift, unsigned g_shift, unsigned b_shift, uint32_t opaque)
+{
+	uint64_t t0;
+	int oh, nb, i;
+
+	pthread_mutex_lock(&g_set_mx);
+	if (g_set_new) {
+		g_on = g_set_on;
+		if (g_on) {
+			if (!g_ctx) g_ctx = pt_create();
+			if (g_ctx) pt_set_params(g_ctx, &g_set_params);
+		}
+		g_set_new = 0;
+	}
+	pthread_mutex_unlock(&g_set_mx);
+
+	if (!g_on || !g_ctx || !src || w <= 0 || h <= 0 || scale < 1) return false;
+	if (!g_own && !(g_own = pt_band_create())) return false;
+	start_helpers();
+
+	t0 = diatom_port_now_us();
+	if (!convert(src, w, h, pitch, fmt)) return false;
+	if (pt_begin_frame(g_ctx, g_buf, w, h, (size_t)w, scale, g_frame++)) return false;
+
+	/* Bands of equal height: the calling thread takes the first. */
+	oh = h * scale;
+	nb = g_nhelp + 1;
+	g_out = out;
+	g_out_pitch = out_pitch;
+	g_fmt.r_shift = r_shift; g_fmt.g_shift = g_shift; g_fmt.b_shift = b_shift;
+	g_fmt.opaque = opaque;
+	if (g_nhelp) {
+		pthread_mutex_lock(&g_mx);
+		for (i = 0; i < g_nhelp; i++) {
+			g_help[i].y0 = oh * (i + 1) / nb;
+			g_help[i].y1 = oh * (i + 2) / nb;
+		}
+		g_left = g_nhelp;
+		g_gen++;
+		pthread_cond_broadcast(&g_go);
+		pthread_mutex_unlock(&g_mx);
+	}
+	pt_render_band(g_ctx, g_own, 0, oh / nb, out, out_pitch, &g_fmt);
+	if (g_nhelp) {
+		pthread_mutex_lock(&g_mx);
+		while (g_left) pthread_cond_wait(&g_done, &g_mx);
+		pthread_mutex_unlock(&g_mx);
+	}
+	log_timing(diatom_port_now_us() - t0, w, h, scale);
+	return true;
+}
+
+void shade_shutdown(void)
+{
+	int i;
+
+	pthread_mutex_lock(&g_mx);
+	g_quit = 1;
+	pthread_cond_broadcast(&g_go);
+	pthread_mutex_unlock(&g_mx);
+	for (i = 0; i < SHADE_HELPERS; i++)
+		if (g_help[i].started) {
+			pthread_join(g_help[i].t, NULL);
+			pt_band_destroy(g_help[i].band);
+			g_help[i].started = 0;
+		}
+	g_nhelp = 0;
+	pt_band_destroy(g_own); g_own = NULL;
+	pt_destroy(g_ctx);      g_ctx = NULL;
+	free(g_buf);            g_buf = NULL; g_buf_cap = 0;
+}
