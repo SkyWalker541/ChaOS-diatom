@@ -1242,6 +1242,12 @@ void diatom_port_shader(diatom_shader kind, const float *params, int nparams)
 	(void)kind; (void)params; (void)nparams;
 }
 
+bool diatom_port_bezel(const uint8_t *bgra, int w, int h)
+{
+	(void)w; (void)h;
+	return bgra == NULL;
+}
+
 void diatom_port_overlay(const uint8_t *bgra, int w, int h, unsigned ms)
 {
 	pthread_mutex_lock(&g_mx);

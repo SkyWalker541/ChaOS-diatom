@@ -1,36 +1,31 @@
 /* Which shader a game gets (ChaOS).
  *
- * For now, until the launcher has its Shaders menu and says so itself:
+ * The launcher decides. Before each RUN it sends SETSHADER with a small file
+ * of the settings for that game's console, written from its Shaders menu:
  *
- *   - Game Boy, Game Boy Color and Game Boy Advance get PT SkyWalker541,
- *     everything else is drawn plainly. Those three are the games mGBA runs,
- *     and which of them a game is comes from its file's extension, or for a
- *     zipped one from the width it draws at (240 is a GBA's).
- *   - Each console starts from the shader's recommended settings for it, from
- *     its README: Game system and Backing color per console, the rest the
- *     shader's own defaults.
- *   - pt.cfg, beside the diatom program (on the card, TortOS/pt.cfg), changes
- *     any of that. It is read at the start of every game, so an edit takes
- *     effect from the next one. Format:
- *
- *         # a comment
- *         enabled = 1            on for every console, or 0 for off
+ *         console = gbc          gb, gbc or gba: which console's settings
+ *         enabled = 1            on, or 0 for off
  *         PT_PIXEL_EFFECT = 2    any parameter, by its GLSL name
  *
- *         [gba]                  what follows is for one console only:
- *         enabled = 0            gb, gbc or gba
- *         PT_GAME_SYSTEM = 3
+ * and sends it again whenever they change in the in-game menu, which applies
+ * them at once (diatom_shading_set_file). An empty path means no shader. The
+ * file's `console` is the shelf the game is on, which is a better answer than
+ * the ROM's extension; without one, the game is placed as below.
  *
- *     Lines before any [section] apply to every console; a console's own
- *     section wins over them. An unknown name is logged and skipped.
- *   - With the shader on, the shader is the whole look, so mGBA's own colour
- *     settings follow the shader README's "Emulator core settings" for the
- *     Game system in use: colour correction, interframe blending and, for a
- *     Game Boy, no colourization (its four plain greys). With the shader off,
- *     the launcher's settings stand. Set for that game only: options set here
- *     lapse when it ends (options.c).
+ * Without a SETSHADER (a launcher that knows nothing of shaders), pt.cfg
+ * beside the diatom program is read instead, in the same form plus [gb] /
+ * [gbc] / [gba] sections whose lines apply to that console only; or the file
+ * DIATOM_PT_CFG names, for the desktop. Without either, the shader's
+ * recommended settings apply (recommended()). Then only mGBA's games are
+ * shaded, and which of the three a game is comes from its file's extension,
+ * or for a zipped one from the width it draws at (240 is a GBA's).
  *
- * DIATOM_PT_CFG names another file instead, for the desktop.
+ * With the shader on, the shader is the whole look, so mGBA's own colour
+ * settings follow the shader README's "Emulator core settings" for the Game
+ * system in use: colour correction, interframe blending and, for a Game Boy,
+ * no colourization (its four plain greys). Set for that game only: options set
+ * here lapse when it ends (options.c). Turning the shader off mid-game leaves
+ * them as they are until the game ends.
  */
 #include "shading.h"
 #include "diatom.h"
@@ -46,6 +41,19 @@
 
 enum { CON_NONE, CON_GB, CON_GBC, CON_GBA };
 static const char *const CON_NAME[] = { "", "gb", "gbc", "gba" };
+
+static int con_named(const char *s)
+{
+	int i;
+	for (i = CON_GB; i <= CON_GBA; i++)
+		if (!strcasecmp(s, CON_NAME[i])) return i;
+	return CON_NONE;
+}
+
+/* The launcher's file, from SETSHADER: g_file_set says one came, g_file empty
+ * says no shader. */
+static char g_file[1024];
+static int  g_file_set;
 
 /* Which of the three a game is, or CON_NONE. */
 static int console_of(const char *core, const char *rom, int base_w)
@@ -90,7 +98,8 @@ static char *trim(char *s)
 	return s;
 }
 
-/* pt.cfg's path: DIATOM_PT_CFG, or beside this program. */
+/* The settings' path: the launcher's file, DIATOM_PT_CFG, or pt.cfg beside
+ * this program. */
 static int cfg_path(char *out, size_t cap)
 {
 	const char *env = getenv("DIATOM_PT_CFG");
@@ -98,6 +107,11 @@ static int cfg_path(char *out, size_t cap)
 	ssize_t n;
 	char *slash;
 
+	if (g_file_set) {
+		if (!g_file[0]) return 0;
+		snprintf(out, cap, "%s", g_file);
+		return 1;
+	}
 	if (env && *env) {
 		snprintf(out, cap, "%s", env);
 		return 1;
@@ -116,7 +130,7 @@ static int cfg_path(char *out, size_t cap)
  * Two passes, so a section wins wherever it sits in the file. */
 static void read_cfg(int con, pt_params *p, int *enabled)
 {
-	char path[600], line[256];
+	char path[1100], line[256];
 	int pass;
 	FILE *f;
 
@@ -145,20 +159,21 @@ static void read_cfg(int con, pt_params *p, int *enabled)
 			*eq = '\0';
 			key = trim(s);
 			val = trim(eq + 1);
+			if (!strcasecmp(key, "console")) continue;   /* file_console */
 			if (!strcasecmp(key, "enabled")) {
 				*enabled = atoi(val) != 0;
 				continue;
 			}
 			k = pt_param_index(key);
 			if (k < 0) {
-				fprintf(stderr, "diatom: pt.cfg: no setting called %s\n", key);
+				fprintf(stderr, "diatom: %s: no setting called %s\n", path, key);
 				continue;
 			}
 			p->v[k] = (float)atof(val);
 		}
 	}
 	fclose(f);
-	printf("diatom: pt.cfg read from %s\n", path);
+	printf("diatom: shader settings read from %s\n", path);
 }
 
 /* The shader README's "Emulator core settings", as mGBA's options, for the
@@ -192,11 +207,34 @@ static void core_options(int con, const pt_params *p)
 	       cc, blend, sys == 1 ? ", no colourization" : "");
 }
 
+/* The console the launcher's file names: CON_NONE when there is no file, or
+ * it names none (then the game is placed by console_of). -1 when the launcher
+ * said no shader. */
+static int file_console(void)
+{
+	char line[256];
+	int con = CON_NONE;
+	FILE *f;
+
+	if (!g_file_set) return CON_NONE;
+	if (!g_file[0]) return -1;
+	if (!(f = fopen(g_file, "r"))) return CON_NONE;
+	while (fgets(line, sizeof line, f)) {
+		char *s = trim(line), *eq = strchr(s, '=');
+		if (!eq) continue;
+		*eq = '\0';
+		if (!strcasecmp(trim(s), "console")) { con = con_named(trim(eq + 1)); break; }
+	}
+	fclose(f);
+	return con;
+}
+
 /* What the shader is for this game: the console, its settings, and whether it
  * is on. CON_NONE when the game is not one of the three. */
 static int choose(const char *core, const char *rom, int base_w, pt_params *p, int *enabled)
 {
-	int con = console_of(core, rom, base_w);
+	int fc = file_console();
+	int con = fc > 0 ? fc : fc < 0 ? CON_NONE : console_of(core, rom, base_w);
 
 	*enabled = 0;
 	if (con == CON_NONE) return CON_NONE;
@@ -206,7 +244,13 @@ static int choose(const char *core, const char *rom, int base_w, pt_params *p, i
 	return con;
 }
 
-static int g_options_set;    /* this game's mGBA options were set before it loaded */
+static int g_options_set;    /* this game's mGBA options have been set */
+static int g_running;        /* between diatom_shading_start and _end */
+static int g_on;             /* the shader is drawing this game */
+static int g_cur_con;        /* the console this game was placed as */
+static pt_params g_cur;      /* and the settings it is drawn with */
+static char g_core[1024], g_rom[1024];
+static int  g_base_w;
 
 void diatom_shading_prepare(const char *core, const char *rom)
 {
@@ -214,12 +258,17 @@ void diatom_shading_prepare(const char *core, const char *rom)
 	int enabled;
 	pt_params p;
 
+	int con;
+
 	g_options_set = 0;
-	/* Before the game loads, only a ROM whose extension names its console
-	 * can be placed; a zip waits for its size (diatom_shading_start). */
-	if (!dot || !strcasecmp(dot, ".zip")) return;
-	if (choose(core, rom, 0, &p, &enabled) != CON_NONE && enabled) {
-		core_options(console_of(core, rom, 0), &p);
+	g_running = 0;
+	/* Before the game loads, only a ROM whose console is named, by the
+	 * launcher or its extension, can be placed; otherwise it waits for its
+	 * size (diatom_shading_start). */
+	if (file_console() == CON_NONE && (!dot || !strcasecmp(dot, ".zip"))) return;
+	con = choose(core, rom, 0, &p, &enabled);
+	if (con != CON_NONE && enabled) {
+		core_options(con, &p);
 		g_options_set = 1;
 	}
 }
@@ -229,14 +278,62 @@ void diatom_shading_start(const char *core, const char *rom, int base_w)
 	int enabled, con;
 	pt_params p;
 
+	snprintf(g_core, sizeof g_core, "%s", core ? core : "");
+	snprintf(g_rom, sizeof g_rom, "%s", rom ? rom : "");
+	g_base_w = base_w;
+	g_running = 1;
 	con = choose(core, rom, base_w, &p, &enabled);
+	g_cur_con = con;
+	g_cur = p;
+	g_on = con != CON_NONE && enabled;
 	if (con == CON_NONE) {
 		diatom_port_shader(DIATOM_SHADER_NONE, NULL, 0);
 		return;
 	}
-	/* A zip's options, now its console is known: mGBA takes them on the next
-	 * frame. */
-	if (enabled && !g_options_set) core_options(con, &p);
+	/* Options not yet set (a zip's, now its console is known, or a change):
+	 * mGBA takes them on the next frame. */
+	if (enabled && !g_options_set) {
+		core_options(con, &p);
+		g_options_set = 1;
+	}
 	printf("diatom: shader for %s: %s\n", CON_NAME[con], enabled ? "PT SkyWalker541" : "off");
 	diatom_port_shader(enabled ? DIATOM_SHADER_PT : DIATOM_SHADER_NONE, p.v, PT_NPARAMS);
+}
+
+void diatom_shading_set_file(const char *path)
+{
+	snprintf(g_file, sizeof g_file, "%s", path ? path : "");
+	g_file_set = 1;
+	if (!g_running) return;
+	/* Mid-game, from the in-game menu: the same choice again, at once. A
+	 * change of Game system changes mGBA's settings with it. */
+	g_options_set = 0;
+	{
+		int enabled;
+		pt_params p;
+		int con = choose(g_core[0] ? g_core : NULL, g_rom[0] ? g_rom : NULL, g_base_w,
+		                 &p, &enabled);
+		if (con != CON_NONE && enabled) {
+			int was = (int)(g_cur.v[PT_GAME_SYSTEM] + 0.5f);
+			int now = (int)(p.v[PT_GAME_SYSTEM] + 0.5f);
+			if (!g_on || was != now) core_options(con, &p);
+			g_options_set = 1;
+		}
+	}
+	diatom_shading_start(g_core[0] ? g_core : NULL, g_rom[0] ? g_rom : NULL, g_base_w);
+}
+
+void diatom_shading_end(void)
+{
+	g_running = 0;
+	g_on = 0;
+	g_file_set = 0;
+	g_file[0] = '\0';
+}
+
+int diatom_shading_current(float *params)
+{
+	if (!g_running || !g_on) return 0;
+	if (params) memcpy(params, g_cur.v, sizeof g_cur.v);
+	return 1;
 }

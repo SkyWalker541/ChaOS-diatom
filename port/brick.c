@@ -95,6 +95,22 @@ static bool             g_presented;
  * blanked under the viewer. */
 static bool             g_page_stale[FB_PAGES];
 
+/* The bezel (ChaOS): an image the size of the panel over every frame. Lent by
+ * the host (diatom_port_bezel). Outside the picture it never changes, so it is
+ * kept once, already laid over black in the framebuffer's own pixels, and
+ * that is what a page is wiped to and what the bar, the disc and a notice put
+ * back. Inside the picture it is blended over each frame, row by row, only
+ * across the span of each row where it is not clear (bezel_spans): for the
+ * usual frame-shaped bezel, nothing at all. */
+static const uint8_t *g_bz;
+static uint32_t      *g_bz_bg;
+static int           *g_bz_x0, *g_bz_x1;   /* per panel row, within the rect */
+static diatom_rect    g_bz_dst;
+static bool           g_bz_spans_ok;
+
+/* What a pixel outside the picture is when nothing is on it. */
+#define BG(x, y) (g_bz_bg ? g_bz_bg[(size_t)(y) * g_vinfo.xres + (size_t)(x)] : g_opaque)
+
 static SDL_AudioDeviceID g_audio;
 static int               g_pad_fd = -1;  /* "Brick Gamepad": every button */
 static bool              g_quit;
@@ -593,7 +609,7 @@ static void clear_gain_bar(uint8_t *base, diatom_rect dst)
 
 		for (x = 0; x < W; x++) {
 			if (covered && x >= x0 && x < x1) continue;   /* the blit's */
-			row[x] = g_opaque;
+			row[x] = BG(x, y);
 		}
 	}
 }
@@ -636,7 +652,7 @@ static void dot_page(uint8_t *base, diatom_rect dst, bool draw)
 			if (draw)
 				row[x] = red;
 			else if (!covered || x < dst.x || x >= dst.x + dst.w)
-				row[x] = g_opaque;
+				row[x] = BG(x, y);
 		}
 	}
 }
@@ -758,7 +774,7 @@ static void clear_overlay(uint8_t *base, diatom_rect r, diatom_rect dst)
 
 		for (x = r.x; x < r.x + r.w; x++) {
 			if (covered && x >= dst.x && x < dst.x + dst.w) continue;
-			row[x] = g_opaque;
+			row[x] = BG(x, y);
 		}
 	}
 }
@@ -1337,6 +1353,109 @@ static inline diatom_rgb mix(diatom_rgb a, diatom_rgb b, int w)
 #define UNDER_ROW_MAX 4096
 static uint32_t g_under_row[UNDER_ROW_MAX];
 
+bool diatom_port_bezel(const uint8_t *bgra, int w, int h)
+{
+	const unsigned ro = g_vinfo.red.offset, go = g_vinfo.green.offset;
+	const unsigned bo = g_vinfo.blue.offset;
+	const size_t W = g_vinfo.xres, H = g_vinfo.yres;
+	bool asked = bgra != NULL;
+	size_t i;
+	int p;
+
+	g_bz = NULL;
+	g_bz_spans_ok = false;
+	if (bgra && (w != (int)W || h != (int)H)) {
+		diatom_port_log(DIATOM_LOG_WARN, "bezel is not the panel's size; ignored");
+		bgra = NULL;
+	}
+	if (bgra) {
+		if (!g_bz_bg) g_bz_bg = malloc(W * H * sizeof *g_bz_bg);
+		if (!g_bz_x0) g_bz_x0 = malloc(H * sizeof *g_bz_x0);
+		if (!g_bz_x1) g_bz_x1 = malloc(H * sizeof *g_bz_x1);
+		if (!g_bz_bg || !g_bz_x0 || !g_bz_x1) {
+			diatom_port_log(DIATOM_LOG_WARN, "bezel: no memory; ignored");
+			bgra = NULL;
+		}
+	}
+	if (!bgra) {
+		free(g_bz_bg);
+		g_bz_bg = NULL;
+	} else {
+		/* Over black: the colour times its alpha. */
+		for (i = 0; i < W * H; i++) {
+			const uint8_t *s = bgra + i * 4;
+			unsigned a = s[3];
+			g_bz_bg[i] = (((s[2] * a + 127) / 255) << ro) | (((s[1] * a + 127) / 255) << go) |
+			             (((s[0] * a + 127) / 255) << bo) | g_opaque;
+		}
+		g_bz = bgra;
+	}
+	/* Every page has the old margins: wipe each as it is next drawn. */
+	for (p = 0; p < FB_PAGES; p++) g_page_stale[p] = true;
+	diatom_port_log(DIATOM_LOG_INFO, g_bz ? "bezel: on" : "bezel: off");
+	return g_bz != NULL || !asked;
+}
+
+/* Where the bezel is not clear in each row of the picture. */
+static void bezel_spans(diatom_rect dst, int x0, int x1, int y0, int y1)
+{
+	int y, x;
+
+	for (y = 0; y < (int)g_vinfo.yres; y++) { g_bz_x0[y] = 0; g_bz_x1[y] = 0; }
+	for (y = y0; y < y1; y++) {
+		const uint8_t *s = g_bz + (size_t)y * g_vinfo.xres * 4;
+		int a = -1, b = -1;
+		for (x = x0; x < x1; x++)
+			if (s[x * 4 + 3]) { if (a < 0) a = x; b = x + 1; }
+		if (a >= 0) { g_bz_x0[y] = a; g_bz_x1[y] = b; }
+	}
+	g_bz_dst = dst;
+	g_bz_spans_ok = true;
+}
+
+/* The bezel over the picture just drawn into the page. Reads the page back,
+ * which is slow memory, but only where the bezel covers the picture. The
+ * notice's copy of what is underneath gets the same pixels. */
+static void bezel_inside(uint8_t *page, diatom_rect dst, int x0, int x1, int y0, int y1,
+                         bool under, int ux0, int uy0)
+{
+	const unsigned ro = g_vinfo.red.offset, go = g_vinfo.green.offset;
+	const unsigned bo = g_vinfo.blue.offset;
+	int y, x;
+
+	if (!g_bz) return;
+	if (!g_bz_spans_ok || memcmp(&dst, &g_bz_dst, sizeof dst))
+		bezel_spans(dst, x0, x1, y0, y1);
+	for (y = y0; y < y1; y++) {
+		uint32_t *row;
+		const uint8_t *s;
+		bool band;
+
+		if (g_bz_x1[y] <= g_bz_x0[y]) continue;
+		row = (uint32_t *)(page + (size_t)y * g_finfo.line_length);
+		s = g_bz + (size_t)y * g_vinfo.xres * 4;
+		band = under && y >= uy0 && y < uy0 + g_ov_h;
+		for (x = g_bz_x0[y]; x < g_bz_x1[y]; x++) {
+			const unsigned a = s[x * 4 + 3];
+			uint32_t p, q;
+			if (!a) continue;
+			if (a == 255) {
+				q = ((uint32_t)s[x * 4 + 2] << ro) | ((uint32_t)s[x * 4 + 1] << go) |
+				    ((uint32_t)s[x * 4] << bo) | g_opaque;
+			} else {
+				p = row[x];
+				q = (((s[x * 4 + 2] * a + ((p >> ro) & 0xff) * (255 - a) + 127) / 255) << ro) |
+				    (((s[x * 4 + 1] * a + ((p >> go) & 0xff) * (255 - a) + 127) / 255) << go) |
+				    (((s[x * 4 + 0] * a + ((p >> bo) & 0xff) * (255 - a) + 127) / 255) << bo) |
+				    g_opaque;
+			}
+			row[x] = q;
+			if (band && x >= ux0 && x < ux0 + g_ov_w)
+				g_ov_under[(size_t)(y - uy0) * (size_t)g_ov_w + (x - ux0)] = q;
+		}
+	}
+}
+
 /* Scale-blit src into the destination rect of one page, converting to the
  * framebuffer's own channel order (offsets read from the driver, not assumed).
  *
@@ -1422,7 +1541,11 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 
 		uy0 = ov_y0();
 		ux0 = ov_x0();
-		for (i = 0; i < n; i++) g_ov_under[i] = opaque;
+		if (g_bz_bg)
+			for (i = 0; i < n; i++)
+				g_ov_under[i] = BG(ux0 + (int)(i % (size_t)g_ov_w), uy0 + (int)(i / (size_t)g_ov_w));
+		else
+			for (i = 0; i < n; i++) g_ov_under[i] = opaque;
 	}
 
 	/* Shaded (ChaOS): at a whole-number scale with the picture wholly on the
@@ -1434,6 +1557,7 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 	    shade_frame(src, w, h, pitch, fmt, dst.w / w,
 	                (uint32_t *)(page + (size_t)dst.y * g_finfo.line_length) + dst.x,
 	                g_finfo.line_length / sizeof(uint32_t), ro, go, bo, opaque)) {
+		bezel_inside(page, dst, x0, x1, y0, y1, false, 0, 0);
 		/* What a notice will need to put back, read from the page: the
 		 * shader writes straight to it, with no row in ordinary memory to
 		 * copy from as below. A few rows, while a notice shows. */
@@ -1472,6 +1596,8 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 		}
 	}
 
+	bezel_inside(page, dst, x0, x1, y0, y1, under, ux0, uy0);
+
 	/* Letterbox bars are not repainted per frame: pages start opaque black and
 	 * the rect only shrinks when the user changes mode, which clears them. */
 #undef BLIT_ROW_NEAREST
@@ -1481,10 +1607,29 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 
 /* Wipe every page to opaque black. Needed when the rect shrinks, or the
  * previous mode's picture stays framing the new one. */
+static void fill_page(uint8_t *base)
+{
+	size_t y, x;
+
+	for (y = 0; y < g_vinfo.yres; y++) {
+		uint32_t *row = (uint32_t *)(base + y * g_finfo.line_length);
+		if (g_bz_bg)
+			memcpy(row, g_bz_bg + y * g_vinfo.xres, g_vinfo.xres * sizeof *row);
+		else
+			for (x = 0; x < g_finfo.line_length / sizeof *row; x++) row[x] = g_opaque;
+	}
+}
+
 static void clear_pages(void)
 {
 	uint32_t *p = (uint32_t *)g_fb;
 	size_t n = g_fb_size / sizeof *p, i;
+	int pg;
+
+	if (g_bz_bg) {
+		for (pg = 0; pg < g_pages; pg++) fill_page(page_base(pg));
+		return;
+	}
 	for (i = 0; i < n; i++) p[i] = g_opaque;
 }
 
@@ -1498,7 +1643,8 @@ static void wipe_if_stale(int page)
 	if (page < 0 || page >= FB_PAGES || !g_page_stale[page]) return;
 	q = (uint32_t *)page_base(page);
 	n = (size_t)g_vinfo.yres * g_finfo.line_length / sizeof *q;
-	for (i = 0; i < n; i++) q[i] = g_opaque;
+	if (g_bz_bg) fill_page((uint8_t *)q);
+	else for (i = 0; i < n; i++) q[i] = g_opaque;
 	g_osd_painted[page] = false;
 	g_dot_painted[page] = false;
 	memset(&g_ov_painted[page], 0, sizeof g_ov_painted[page]);

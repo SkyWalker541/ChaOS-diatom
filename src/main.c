@@ -24,6 +24,7 @@
 #include "diatom.h"
 #include "levels.h"
 #include "shading.h"
+#include "pt_shader.h"
 
 /* --- the frame the core last handed us ----------------------------------- */
 static void       *g_frame;
@@ -186,6 +187,142 @@ static bool write_preview(const char *path)
 
 static diatom_port_caps g_caps;
 static diatom_rect      g_dst;   /* locked at load */
+
+/* ---- ChaOS: the shaded preview, and the bezel ----------------------------
+ *
+ * The shaded preview is the paused frame as the shader draws it on the panel:
+ * the size of the picture's rect, so the launcher can put it back exactly
+ * where the game was and draw its menu over the real look of the game rather
+ * than the plain pixels. Written on its own thread's time, once per pause and
+ * once per settings change, so one thread is plenty (~25 ms on a Brick). */
+static bool write_shaded(const char *path, diatom_rect *where)
+{
+	float v[PT_NPARAMS];
+	pt_params pp;
+	pt_ctx *c;
+	pt_format fmt = { 16, 8, 0, 0 };
+	uint32_t *in = NULL, *out = NULL;
+	int w = g_frame_w, h = g_frame_h, scale, ow, oh, x, y;
+	size_t row, pad;
+	unsigned char hdr[54];
+	unsigned size;
+	bool ok = false;
+	FILE *f = NULL;
+
+	if (!path || !*path || !g_frame || w <= 0 || h <= 0 || !diatom_shading_current(v))
+		return false;
+	scale = g_dst.w / w;
+	if (scale < 1 || g_dst.w != w * scale || g_dst.h != h * scale) return false;
+	ow = w * scale;
+	oh = h * scale;
+	memcpy(pp.v, v, sizeof pp.v);
+
+	in  = malloc((size_t)w * h * sizeof *in);
+	out = malloc((size_t)ow * oh * sizeof *out);
+	c = pt_create();
+	if (!in || !out || !c) goto done;
+	for (y = 0; y < h; y++) {
+		const unsigned char *src = (const unsigned char *)g_frame + (size_t)y * g_frame_pitch;
+		for (x = 0; x < w; x++) {
+			uint32_t p;
+			if (g_policy.pixfmt == DIATOM_PIX_RGB565) {
+				unsigned q = ((const unsigned short *)src)[x];
+				unsigned r = (q >> 11) & 0x1f, g = (q >> 5) & 0x3f, b = q & 0x1f;
+				p = (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) |
+				    ((b << 3) | (b >> 2));
+			} else {
+				p = ((const uint32_t *)src)[x] & 0x00ffffffu;
+			}
+			in[(size_t)y * w + x] = p;
+		}
+	}
+	pt_set_params(c, &pp);
+	if (pt_render(c, in, w, h, (size_t)w, scale, out, (size_t)ow, &fmt, 0)) goto done;
+
+	if (!(f = fopen(path, "wb"))) goto done;
+	row = (size_t)ow * 3;
+	pad = (4 - (row & 3)) & 3;
+	size = 54 + (unsigned)((row + pad) * (size_t)oh);
+	memset(hdr, 0, sizeof hdr);
+	hdr[0] = 'B'; hdr[1] = 'M';
+	hdr[2] = (unsigned char)size; hdr[3] = (unsigned char)(size >> 8);
+	hdr[4] = (unsigned char)(size >> 16); hdr[5] = (unsigned char)(size >> 24);
+	hdr[10] = 54; hdr[14] = 40;
+	hdr[18] = (unsigned char)ow; hdr[19] = (unsigned char)(ow >> 8);
+	hdr[22] = (unsigned char)oh; hdr[23] = (unsigned char)(oh >> 8);
+	hdr[26] = 1; hdr[28] = 24;
+	fwrite(hdr, 1, sizeof hdr, f);
+	{
+		unsigned char *line = malloc(row + pad);
+		if (!line) goto done;
+		memset(line, 0, row + pad);
+		for (y = oh - 1; y >= 0; y--) {
+			const uint32_t *o = out + (size_t)y * ow;
+			for (x = 0; x < ow; x++) {
+				line[x * 3 + 0] = (unsigned char)o[x];
+				line[x * 3 + 1] = (unsigned char)(o[x] >> 8);
+				line[x * 3 + 2] = (unsigned char)(o[x] >> 16);
+			}
+			fwrite(line, 1, row + pad, f);
+		}
+		free(line);
+	}
+	ok = true;
+	if (where) *where = g_dst;
+done:
+	if (f) fclose(f);
+	pt_destroy(c);
+	free(in);
+	free(out);
+	return ok;
+}
+
+/* Say where the shaded preview is, or that there is none for this game. */
+static void send_shaded(const char *path)
+{
+	diatom_rect r;
+
+	if (write_shaded(path, &r))
+		diatom_proto_send("SHADED\tpath=%s\tx=%d\ty=%d\tw=%d\th=%d",
+		                  path, r.x, r.y, r.w, r.h);
+	else
+		diatom_proto_send("SHADED");
+}
+
+/* The bezel: an image the size of the panel, drawn over every frame, from a
+ * DTOV file as the notice overlay's (straight-alpha BGRA). Held here and lent
+ * to the port, as the notice is. */
+static uint8_t *g_bezel;
+
+static bool set_bezel(const char *path)
+{
+	unsigned char hdr[8];
+	uint8_t *img;
+	size_t need;
+	FILE *f;
+	int w, h;
+
+	diatom_port_bezel(NULL, 0, 0);
+	free(g_bezel);
+	g_bezel = NULL;
+	if (!path || !*path) return true;
+
+	if (!(f = fopen(path, "rb"))) return false;
+	if (fread(hdr, 1, sizeof hdr, f) != sizeof hdr || memcmp(hdr, "DTOV", 4) != 0) {
+		fclose(f);
+		return false;
+	}
+	w = hdr[4] | (hdr[5] << 8);
+	h = hdr[6] | (hdr[7] << 8);
+	if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { fclose(f); return false; }
+	need = (size_t)w * (size_t)h * 4;
+	if (!(img = malloc(need))) { fclose(f); return false; }
+	if (fread(img, 1, need, f) != need) { fclose(f); free(img); return false; }
+	fclose(f);
+	if (!diatom_port_bezel(img, w, h)) { free(img); return false; }
+	g_bezel = img;
+	return true;
+}
 
 /* Set from a signal handler and read by the frame loop. The handler does NO
  * file I/O: it flips this, the loop notices after retro_run returns and does
@@ -673,6 +810,13 @@ static bool menu_pause(const diatom_session *sn)
 	 * is already on disk. The order is the contract. */
 	if (sn->preview && write_preview(sn->preview))
 		diatom_proto_send("PREVIEW\tpath=%s", sn->preview);
+	/* ChaOS: and the frame as the shader draws it, beside it, for the menu's
+	 * backdrop. Only when the game is shaded. */
+	if (sn->preview && diatom_shading_current(NULL)) {
+		char sp[1100];
+		snprintf(sp, sizeof sp, "%s.shaded.bmp", sn->preview);
+		send_shaded(sp);
+	}
 
 	/* The same handover as EXIT, and the same requirement: nothing in flight
 	 * before the launcher starts drawing. This was a 20ms sleep, which is a
@@ -1128,6 +1272,18 @@ static bool state_plane_msg(const diatom_msg *m)
 		diatom_proto_send(show_overlay(m->path, (unsigned)m->count)
 		                  ? "OVERLAID" : "ERROR\tcode=bad_overlay\tmsg=%s",
 		                  m->path);
+		return true;
+	case DIATOM_MSG_SETSHADER:
+		/* ChaOS. Taken at once, mid-game too; then, if asked, the paused
+		 * frame drawn with the new settings, for the menu behind it. */
+		diatom_shading_set_file(m->path);
+		if (m->preview[0]) send_shaded(m->preview);
+		return true;
+	case DIATOM_MSG_SETBEZEL:
+		if (set_bezel(m->path))
+			diatom_proto_send("BEZEL\tpath=%s", m->path);
+		else
+			diatom_proto_send("ERROR\tcode=bad_bezel\tmsg=%s", m->path);
 		return true;
 	case DIATOM_MSG_CHEEVOS: diatom_cheevos_emit(); return true;
 	case DIATOM_MSG_SETCHEEVOS:
@@ -2147,6 +2303,9 @@ int main(int argc, char **argv)
 			 * resident and several systems share one, so a value left
 			 * standing reaches the next game through the same core. */
 			diatom_options_clear_pending();
+			/* ChaOS: the shader and the bezel were for that game too. */
+			diatom_shading_end();
+			set_bezel(NULL);
 		}
 		diatom_proto_close();
 	} else {

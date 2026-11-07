@@ -303,6 +303,27 @@ static void draw_overlay(void)
 	SDL_RenderCopy(g_renderer, g_ov_tex, NULL, &r);
 }
 
+/* The bezel (ChaOS): drawn over the whole window, after the picture. */
+static SDL_Texture *g_bz_tex;
+
+bool diatom_port_bezel(const uint8_t *bgra, int w, int h)
+{
+	if (g_bz_tex) { SDL_DestroyTexture(g_bz_tex); g_bz_tex = NULL; }
+	if (!bgra) return true;
+	if (w <= 0 || h <= 0) return false;
+	g_bz_tex = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_ARGB8888,
+	                             SDL_TEXTUREACCESS_STATIC, w, h);
+	if (!g_bz_tex) return false;
+	SDL_SetTextureBlendMode(g_bz_tex, SDL_BLENDMODE_BLEND);
+	SDL_UpdateTexture(g_bz_tex, NULL, bgra, w * 4);
+	return true;
+}
+
+static void draw_bezel(void)
+{
+	if (g_bz_tex) SDL_RenderCopy(g_renderer, g_bz_tex, NULL, NULL);
+}
+
 /* Shaders (ChaOS). A shaded frame is drawn at screen size into g_shade_buf
  * and shown through its own texture. DIATOM_SHADE_DUMP=<file.ppm> writes one
  * shaded frame to a file, the DIATOM_SHADE_DUMP_FRAME'th (60 by default), so
@@ -364,6 +385,7 @@ static bool present_shaded(const void *src, int w, int h, size_t pitch,
 	SDL_RenderClear(g_renderer);
 	r.x = dst.x; r.y = dst.y; r.w = dst.w; r.h = dst.h;
 	SDL_RenderCopy(g_renderer, g_shade_tex, NULL, &r);
+	draw_bezel();
 	draw_overlay();
 	SDL_RenderPresent(g_renderer);
 	return g_shaded_last = true;
@@ -384,6 +406,7 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 		r.x = dst.x; r.y = dst.y; r.w = dst.w; r.h = dst.h;
 		SDL_RenderCopy(g_renderer, g_texture, NULL, &r);
 	}
+	draw_bezel();
 	draw_overlay();
 	SDL_RenderPresent(g_renderer);
 }
