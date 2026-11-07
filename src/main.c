@@ -1280,10 +1280,15 @@ static bool state_plane_msg(const diatom_msg *m)
 		if (m->preview[0]) send_shaded(m->preview);
 		return true;
 	case DIATOM_MSG_SETBEZEL:
-		if (set_bezel(m->path))
+		/* Never ERROR: it comes before RUNNING, where a launcher reads an
+		 * ERROR as a game that failed to start. An overlay that will not load
+		 * is no overlay, said as such, and logged. */
+		if (set_bezel(m->path)) {
 			diatom_proto_send("BEZEL\tpath=%s", m->path);
-		else
-			diatom_proto_send("ERROR\tcode=bad_bezel\tmsg=%s", m->path);
+		} else {
+			fprintf(stderr, "diatom: overlay %s could not be read; none shown\n", m->path);
+			diatom_proto_send("BEZEL\tpath=");
+		}
 		return true;
 	case DIATOM_MSG_CHEEVOS: diatom_cheevos_emit(); return true;
 	case DIATOM_MSG_SETCHEEVOS:
