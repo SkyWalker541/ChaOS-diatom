@@ -136,6 +136,12 @@ typedef enum {
 
 void diatom_port_shader(diatom_shader kind, const float *params, int nparams);
 
+/* A bezel: an image drawn over every frame, picture and margins alike (ChaOS).
+ * Straight-alpha BGRA, w x h, which must be the panel's size; NULL removes it.
+ * The pointer is BORROWED until the next call, as diatom_port_overlay's.
+ * Returns false when refused (the wrong size, or no memory). */
+bool diatom_port_bezel(const uint8_t *bgra, int w, int h);
+
 /* Stop presenting, without tearing down. Returns when nothing is pending and
  * nothing is in flight, so a SECOND presenter may take the display safely.
  * The port stays initialized and must serve the next diatom_port_present.

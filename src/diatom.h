@@ -161,6 +161,13 @@ typedef enum {
 	DIATOM_MSG_DISPLAY,    /* report the display mode and filter */
 	DIATOM_MSG_SETDISPLAY, /* set them: `dmode`, `dfilter` */
 	DIATOM_MSG_OVERLAY,    /* composite `path` over the game for `count` ms */
+	/* ChaOS. SETSHADER: the launcher's shader settings for the game, from the
+	 * file at `path` (shading.c says its form), sent before RUN and again
+	 * when they change; with `preview` while paused, the paused frame is
+	 * drawn shaded to that BMP and SHADED answers. SETBEZEL: an overlay image
+	 * drawn over every frame, from the DTOV file at `path`; empty removes it. */
+	DIATOM_MSG_SETSHADER,
+	DIATOM_MSG_SETBEZEL,
 	DIATOM_MSG_CHEEVOS,    /* report the achievement set and what has fired */
 	DIATOM_MSG_SETCHEEVOS, /* load a set from `path`; empty unloads */
 	DIATOM_MSG_AUDIO,      /* report where sound is going */

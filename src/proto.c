@@ -180,6 +180,8 @@ static void parse_line(char *line, diatom_msg *out)
 	else if (!strcmp(field, "DISPLAY"))  out->kind = DIATOM_MSG_DISPLAY;
 	else if (!strcmp(field, "SETDISPLAY")) out->kind = DIATOM_MSG_SETDISPLAY;
 	else if (!strcmp(field, "OVERLAY"))    out->kind = DIATOM_MSG_OVERLAY;
+	else if (!strcmp(field, "SETSHADER"))  out->kind = DIATOM_MSG_SETSHADER;
+	else if (!strcmp(field, "SETBEZEL"))   out->kind = DIATOM_MSG_SETBEZEL;
 	else if (!strcmp(field, "CHEEVOS"))    out->kind = DIATOM_MSG_CHEEVOS;
 	else if (!strcmp(field, "SETCHEEVOS")) out->kind = DIATOM_MSG_SETCHEEVOS;
 	else if (!strcmp(field, "AUDIO"))      out->kind = DIATOM_MSG_AUDIO;
