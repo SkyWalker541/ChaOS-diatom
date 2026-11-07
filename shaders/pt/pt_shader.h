@@ -119,4 +119,10 @@ int      pt_begin_frame(pt_ctx *c, const uint32_t *src, int w, int h, size_t src
 int      pt_render_band(const pt_ctx *c, pt_band *b, int y0, int y1,
                         uint32_t *dst, size_t dst_pitch, const pt_format *fmt);
 
+/* As pt_render_band, but `rows` is where row y0 goes, not the whole output:
+ * for drawing a band a few rows at a time into a small buffer that stays in
+ * the cache, to be finished and copied on from there. */
+int      pt_render_rows(const pt_ctx *c, pt_band *b, int y0, int y1,
+                        uint32_t *rows, size_t rows_pitch, const pt_format *fmt);
+
 #endif

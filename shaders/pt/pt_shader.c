@@ -485,7 +485,7 @@ void render_rows(const pt_ctx *c, pt_band *e, int y0, int y1,
 		const int16_t *restrict glg = GLARE ? c->glg + (size_t)Y * ow : NULL;
 		const int16_t *restrict glb = GLARE ? c->glb + (size_t)Y * ow : NULL;
 		const uint16_t *restrict glk = GLARE ? c->glk + (size_t)Y * ow : NULL;
-		uint32_t *restrict out = dst + (size_t)Y * pitch;
+		uint32_t *restrict out = dst + (size_t)(Y - y0) * pitch;   /* dst is row y0 */
 		int X;
 
 		if (sy != last_sy) { spread_source(c, e, sy); last_sy = sy; last_shy = -1; }
@@ -618,16 +618,36 @@ int pt_begin_frame(pt_ctx *c, const uint32_t *src, int w, int h, size_t src_pitc
 	return 0;
 }
 
+static int band_rows(const pt_ctx *c, pt_band *b, int y0, int y1,
+                     uint32_t *dst, size_t dst_pitch, const pt_format *fmt, int whole);
+
 int pt_render_band(const pt_ctx *c, pt_band *b, int y0, int y1,
                    uint32_t *dst, size_t dst_pitch, const pt_format *fmt)
+{
+	return band_rows(c, b, y0, y1, dst, dst_pitch, fmt, 1);
+}
+
+int pt_band_rows(const pt_ctx *c, pt_band *b, int y0, int y1,
+                   uint32_t *rows, size_t rows_pitch, const pt_format *fmt)
+{
+	return band_rows(c, b, y0, y1, rows, rows_pitch, fmt, 0);
+}
+
+/* `whole`: dst is the top-left of the whole output; otherwise row y0. */
+static int band_rows(const pt_ctx *c, pt_band *b, int y0, int y1,
+                     uint32_t *dst, size_t dst_pitch, const pt_format *fmt, int whole)
 {
 	const float *P = c->p.v;
 	int fx, gap, glare, bezel;
 
 	if (!c->ready || band_fit(b, c->ow)) return -1;
-	if (y0 < 0) y0 = 0;
+	if (y0 < 0) {
+		if (!whole) dst += (size_t)(-y0) * dst_pitch;
+		y0 = 0;
+	}
 	if (y1 > c->oh) y1 = c->oh;
 	if (y0 >= y1) return 0;
+	if (whole) dst += (size_t)y0 * dst_pitch;
 
 	fx    = P[PT_PIXEL_EFFECT] < 0.5f ? FX_OFF : (P[PT_PIXEL_EFFECT] < 1.5f ? FX_GRID : FX_DOT);
 	gap   = P[PT_GAP_COLOR] < 0.5f ? GAP_BACKING : (P[PT_GAP_COLOR] < 1.5f ? GAP_BLACK : GAP_WHITE);
