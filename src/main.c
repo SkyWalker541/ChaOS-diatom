@@ -1255,6 +1255,7 @@ static int run_session_inner(const diatom_session *sn)
 	 * belongs to. Diatom never guesses this. */
 	diatom_cheevos_set_console((unsigned)sn->console);
 
+	diatom_shading_prepare(sn->core, sn->rom);
 	if (!diatom_core_start(g_core, sn->rom)) {
 		/* Say the firmware was found, so a launcher that reports this does not
 		 * send someone hunting for a BIOS they already have. */
