@@ -33,6 +33,12 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
                  int scale, uint32_t *out, size_t out_pitch,
                  unsigned r_shift, unsigned g_shift, unsigned b_shift, uint32_t opaque);
 
+/* For the next shade_frame only: each thread, once it has drawn its band of
+ * rows [y0, y1) (counted from the picture's top), calls fn(ctx, y0, y1) on
+ * them, in parallel with the others. The Brick lays the overlay over its band
+ * there and copies it to the page, so that work is split three ways too. */
+void shade_band_hook(void (*fn)(void *ctx, int y0, int y1), void *ctx);
+
 /* Stop the helper threads and free everything. */
 void shade_shutdown(void);
 
