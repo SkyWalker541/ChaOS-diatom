@@ -627,7 +627,7 @@ int pt_render_band(const pt_ctx *c, pt_band *b, int y0, int y1,
 	return band_rows(c, b, y0, y1, dst, dst_pitch, fmt, 1);
 }
 
-int pt_band_rows(const pt_ctx *c, pt_band *b, int y0, int y1,
+int pt_render_rows(const pt_ctx *c, pt_band *b, int y0, int y1,
                    uint32_t *rows, size_t rows_pitch, const pt_format *fmt)
 {
 	return band_rows(c, b, y0, y1, rows, rows_pitch, fmt, 0);

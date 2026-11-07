@@ -4,7 +4,7 @@
  *
  *   1. the core's frame is converted once to 0x00RRGGBB, the form the shader
  *      reads (a GBA frame is 38,400 pixels, so this costs next to nothing);
- *   2. pt_begin_frame does the per-frame work over the game's pixels;
+ *   2. the shader begins the frame: the per-frame work over the game's pixels;
  *   3. the screen rows are split into bands, two drawn by helper threads and
  *      one by the calling thread, and the call returns when all three are done.
  *
@@ -18,7 +18,7 @@
  * to the log, which is how its cost on the device is read.
  */
 #include "shade.h"
-#include "pt_shader.h"
+#include "cpu_shader.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -32,22 +32,26 @@
 
 static pthread_mutex_t g_set_mx = PTHREAD_MUTEX_INITIALIZER;
 static int       g_set_new;          /* a choice not yet taken up */
-static int       g_set_on;
-static pt_params g_set_params;
+static int       g_set_kind;         /* CS_*, CS_NONE for off */
+static float     g_set_params[64];
 static int       g_on;               /* as taken up by the drawing thread */
+
+_Static_assert((int)DIATOM_SHADER_PT == CS_PT && (int)DIATOM_SHADER_CRT == CS_CRT &&
+               (int)DIATOM_SHADER_LCD == CS_LCD, "diatom_shader and cpu_shader.h agree");
 
 void shade_set(diatom_shader kind, const float *params, int nparams)
 {
 	char m[96];
 
+	int n = cs_nparams((int)kind);
+
 	pthread_mutex_lock(&g_set_mx);
-	g_set_on = kind == DIATOM_SHADER_PT && params && nparams == PT_NPARAMS;
-	pt_params_default(&g_set_params);
-	if (g_set_on) memcpy(g_set_params.v, params, sizeof g_set_params.v);
+	g_set_kind = n > 0 && n <= 64 && params && nparams == n ? (int)kind : CS_NONE;
+	if (g_set_kind) memcpy(g_set_params, params, (size_t)n * sizeof *params);
 	g_set_new = 1;
 	pthread_mutex_unlock(&g_set_mx);
 
-	snprintf(m, sizeof m, "shade: %s", g_set_on ? "PT SkyWalker541" : "off");
+	snprintf(m, sizeof m, "shade: %s", g_set_kind ? cs_name(g_set_kind) : "off");
 	diatom_port_log(DIATOM_LOG_INFO, m);
 }
 
@@ -55,22 +59,22 @@ bool shade_active(void)
 {
 	bool on;
 	pthread_mutex_lock(&g_set_mx);
-	on = g_set_new ? g_set_on : g_on;
+	on = g_set_new ? g_set_kind != CS_NONE : g_on;
 	pthread_mutex_unlock(&g_set_mx);
 	return on;
 }
 
 /* ---- the frame, and the threads drawing it -------------------------------- */
 
-static pt_ctx   *g_ctx;
-static pt_band  *g_own;              /* the calling thread's band */
+static cs_ctx   *g_ctx;
+static cs_band  *g_own;              /* the calling thread's band */
 static uint32_t *g_buf;              /* the frame as 0x00RRGGBB */
 static size_t    g_buf_cap;
 static unsigned  g_frame;
 
 typedef struct {
 	pthread_t t;
-	pt_band  *band;
+	cs_band  *band;
 	int       y0, y1;
 	int       started;
 } helper;
@@ -107,7 +111,8 @@ static void *helper_main(void *arg)
 		seen = g_gen;
 		pthread_mutex_unlock(&g_mx);
 
-		pt_render_band(g_ctx, hp->band, hp->y0, hp->y1, g_out, g_out_pitch, &g_fmt);
+		cs_render_rows(g_ctx, hp->band, hp->y0, hp->y1, g_out + (size_t)hp->y0 * g_out_pitch,
+		               g_out_pitch, &g_fmt);
 		if (g_hook) g_hook(g_hook_ctx, hp->y0, hp->y1);
 
 		pthread_mutex_lock(&g_mx);
@@ -126,9 +131,9 @@ static void start_helpers(void)
 	if (tried) return;
 	tried = 1;
 	for (i = 0; i < SHADE_HELPERS; i++) {
-		g_help[i].band = pt_band_create();
+		g_help[i].band = cs_band_create();
 		if (!g_help[i].band || pthread_create(&g_help[i].t, NULL, helper_main, &g_help[i])) {
-			pt_band_destroy(g_help[i].band);
+			cs_band_destroy(g_help[i].band);
 			g_help[i].band = NULL;
 			break;
 		}
@@ -181,8 +186,8 @@ static void log_timing(uint64_t us, int w, int h, int scale)
 	if (us > worst) worst = us;
 	if (++count < SHADE_LOG_EVERY) return;
 	snprintf(m, sizeof m,
-	         "shade: PT %dx%d at %dx, %u frames: %.2f ms average, %.2f ms worst, %d threads",
-	         w, h, scale, count, (double)total / count / 1000.0, (double)worst / 1000.0,
+	         "shade: %s %dx%d at %dx, %u frames: %.2f ms average, %.2f ms worst, %d threads",
+	         cs_name(cs_kind(g_ctx)), w, h, scale, count, (double)total / count / 1000.0, (double)worst / 1000.0,
 	         g_nhelp + 1);
 	diatom_port_log(DIATOM_LOG_INFO, m);
 	total = worst = 0;
@@ -198,17 +203,20 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 
 	pthread_mutex_lock(&g_set_mx);
 	if (g_set_new) {
-		g_on = g_set_on;
+		g_on = g_set_kind != CS_NONE;
 		if (g_on) {
-			if (!g_ctx) g_ctx = pt_create();
-			if (g_ctx) pt_set_params(g_ctx, &g_set_params);
+			/* another shader: the old one's context goes (the helpers
+			 * draw only inside shade_frame, so none is using it) */
+			if (g_ctx && cs_kind(g_ctx) != g_set_kind) { cs_destroy(g_ctx); g_ctx = NULL; }
+			if (!g_ctx) g_ctx = cs_create(g_set_kind);
+			if (g_ctx) cs_set_params(g_ctx, g_set_params);
 		}
 		g_set_new = 0;
 	}
 	pthread_mutex_unlock(&g_set_mx);
 
 	if (!g_on || !g_ctx || !src || w <= 0 || h <= 0 || scale < 1 ||
-	    (!g_own && !(g_own = pt_band_create()))) {
+	    (!g_own && !(g_own = cs_band_create()))) {
 		g_hook = NULL;
 		return false;
 	}
@@ -216,7 +224,7 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 
 	t0 = diatom_port_now_us();
 	if (!convert(src, w, h, pitch, fmt) ||
-	    pt_begin_frame(g_ctx, g_buf, w, h, (size_t)w, scale, g_frame++)) {
+	    cs_begin_frame(g_ctx, g_buf, w, h, (size_t)w, scale, g_frame++)) {
 		g_hook = NULL;
 		return false;
 	}
@@ -239,7 +247,7 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 		pthread_cond_broadcast(&g_go);
 		pthread_mutex_unlock(&g_mx);
 	}
-	pt_render_band(g_ctx, g_own, 0, oh / nb, out, out_pitch, &g_fmt);
+	cs_render_rows(g_ctx, g_own, 0, oh / nb, out, out_pitch, &g_fmt);
 	if (g_hook) g_hook(g_hook_ctx, 0, oh / nb);
 	if (g_nhelp) {
 		pthread_mutex_lock(&g_mx);
@@ -262,11 +270,11 @@ void shade_shutdown(void)
 	for (i = 0; i < SHADE_HELPERS; i++)
 		if (g_help[i].started) {
 			pthread_join(g_help[i].t, NULL);
-			pt_band_destroy(g_help[i].band);
+			cs_band_destroy(g_help[i].band);
 			g_help[i].started = 0;
 		}
 	g_nhelp = 0;
-	pt_band_destroy(g_own); g_own = NULL;
-	pt_destroy(g_ctx);      g_ctx = NULL;
+	cs_band_destroy(g_own); g_own = NULL;
+	cs_destroy(g_ctx);      g_ctx = NULL;
 	free(g_buf);            g_buf = NULL; g_buf_cap = 0;
 }

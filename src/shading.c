@@ -1,11 +1,17 @@
 /* Which shader a game gets (ChaOS).
  *
+ * Each console has the one shader that suits it (shaders/cpu_shader.h):
+ *
+ *         gb gbc gba             PT SkyWalker541
+ *         nes sms md pce sfc     crt-lottes-fast
+ *         gg ngp ngpc            lcd3x
+ *
  * The launcher decides. Before each RUN it sends SETSHADER with a small file
  * of the settings for that game's console, written from its Shaders menu:
  *
- *         console = gbc          gb, gbc or gba: which console's settings
+ *         console = gbc          the console's tag, lower case
  *         enabled = 1            on, or 0 for off
- *         PT_PIXEL_EFFECT = 2    any parameter, by its GLSL name
+ *         PT_PIXEL_EFFECT = 2    any of its shader's parameters, by GLSL name
  *
  * and sends it again whenever they change in the in-game menu, which applies
  * them at once (diatom_shading_set_file). An empty path means no shader. The
@@ -20,7 +26,9 @@
  * shaded, and which of the three a game is comes from its file's extension,
  * or for a zipped one from the width it draws at (240 is a GBA's).
  *
- * With the shader on, the shader is the whole look, so mGBA's own colour
+ * The other consoles are shaded only when the launcher names them.
+ *
+ * With PT on, the shader is the whole look, so mGBA's own colour
  * settings follow the shader README's "Emulator core settings" for the Game
  * system in use: colour correction, interframe blending and, for a Game Boy,
  * no colourization (its four plain greys). Set for that game only: options set
@@ -31,6 +39,7 @@
 #include "diatom.h"
 #include "diatom_port.h"
 #include "pt_shader.h"
+#include "cpu_shader.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -39,13 +48,23 @@
 #include <strings.h>
 #include <unistd.h>
 
-enum { CON_NONE, CON_GB, CON_GBC, CON_GBA };
-static const char *const CON_NAME[] = { "", "gb", "gbc", "gba" };
+enum { CON_NONE, CON_GB, CON_GBC, CON_GBA,
+       CON_NES, CON_SMS, CON_MD, CON_PCE, CON_SFC,
+       CON_GG, CON_NGP, CON_NGPC, CON_COUNT };
+static const char *const CON_NAME[CON_COUNT] = {
+	"", "gb", "gbc", "gba", "nes", "sms", "md", "pce", "sfc", "gg", "ngp", "ngpc"
+};
+/* Each console's shader */
+static const int CON_KIND[CON_COUNT] = {
+	CS_NONE, CS_PT, CS_PT, CS_PT, CS_CRT, CS_CRT, CS_CRT, CS_CRT, CS_CRT,
+	CS_LCD, CS_LCD, CS_LCD
+};
+#define MAXP 64
 
 static int con_named(const char *s)
 {
 	int i;
-	for (i = CON_GB; i <= CON_GBA; i++)
+	for (i = CON_GB; i < CON_COUNT; i++)
 		if (!strcasecmp(s, CON_NAME[i])) return i;
 	return CON_NONE;
 }
@@ -76,17 +95,25 @@ static int console_of(const char *core, const char *rom, int base_w)
 	return base_w == 240 ? CON_GBA : CON_GBC;
 }
 
-/* The shader's README, "Recommended Settings": Game system and Backing color
- * per console. GBA is the original, unlit model, whose screen is the one this
- * shader recreates; pt.cfg turns it into an SP (3, and Backing color 3). */
-static void recommended(int con, pt_params *p)
+/* PT: the shader's README, "Recommended Settings": Game system and Backing
+ * color per console. GBA is the original, unlit model, whose screen is the one
+ * this shader recreates; pt.cfg turns it into an SP (3, and Backing color 3).
+ *
+ * crt-lottes-fast: its own defaults, but flat (CURVATURE 0): the picture sits
+ * in a frame on the Brick, square-cornered, and a flat screen costs the CPU
+ * half what a curved one does. The launcher's recommended settings are the
+ * same (chaos src/look.c). lcd3x: its own defaults. */
+static void recommended(int con, float *p)
 {
-	pt_params_default(p);
+	int kind = CON_KIND[con], i;
+
+	for (i = 0; i < cs_nparams(kind); i++) p[i] = cs_param_def(kind, i);
 	switch (con) {
-	case CON_GB:  p->v[PT_GAME_SYSTEM] = 1; p->v[PT_BACKING_COLOR] = 1; break;
-	case CON_GBC: p->v[PT_GAME_SYSTEM] = 2; p->v[PT_BACKING_COLOR] = 1; break;
-	case CON_GBA: p->v[PT_GAME_SYSTEM] = 4; p->v[PT_BACKING_COLOR] = 2; break;
+	case CON_GB:  p[PT_GAME_SYSTEM] = 1; p[PT_BACKING_COLOR] = 1; break;
+	case CON_GBC: p[PT_GAME_SYSTEM] = 2; p[PT_BACKING_COLOR] = 1; break;
+	case CON_GBA: p[PT_GAME_SYSTEM] = 4; p[PT_BACKING_COLOR] = 2; break;
 	}
+	if (kind == CS_CRT) p[cs_param_index(CS_CRT, "CURVATURE")] = 0.0f;
 }
 
 static char *trim(char *s)
@@ -128,7 +155,7 @@ static int cfg_path(char *out, size_t cap)
 
 /* Apply pt.cfg's lines for this console: the shared part, then its section.
  * Two passes, so a section wins wherever it sits in the file. */
-static void read_cfg(int con, pt_params *p, int *enabled)
+static void read_cfg(int con, float *p, int *enabled)
 {
 	char path[1100], line[256];
 	int pass;
@@ -164,12 +191,13 @@ static void read_cfg(int con, pt_params *p, int *enabled)
 				*enabled = atoi(val) != 0;
 				continue;
 			}
-			k = pt_param_index(key);
+			k = cs_param_index(CON_KIND[con], key);
 			if (k < 0) {
-				fprintf(stderr, "diatom: %s: no setting called %s\n", path, key);
+				fprintf(stderr, "diatom: %s: %s has no setting called %s\n", path,
+				        cs_name(CON_KIND[con]), key);
 				continue;
 			}
-			p->v[k] = (float)atof(val);
+			p[k] = (float)atof(val);
 		}
 	}
 	fclose(f);
@@ -185,11 +213,12 @@ static void read_cfg(int con, pt_params *p, int *enabled)
  *   3 GBA SP           GBA                Smart
  *   4 GBA Original     GBA                LCD ghosting (accurate)
  */
-static void core_options(int con, const pt_params *p)
+static void core_options(int con, const float *p)
 {
-	int sys = (int)(p->v[PT_GAME_SYSTEM] + 0.5f);
+	int sys = (int)(p[PT_GAME_SYSTEM] + 0.5f);
 	const char *cc, *blend;
 
+	if (CON_KIND[con] != CS_PT) return;     /* mGBA's alone */
 	if (sys < 1 || sys > 4) sys = con == CON_GB ? 1 : con == CON_GBC ? 2 : 4;
 	switch (sys) {
 	case 1:  cc = "OFF"; blend = "OFF";          break;
@@ -231,7 +260,7 @@ static int file_console(void)
 
 /* What the shader is for this game: the console, its settings, and whether it
  * is on. CON_NONE when the game is not one of the three. */
-static int choose(const char *core, const char *rom, int base_w, pt_params *p, int *enabled)
+static int choose(const char *core, const char *rom, int base_w, float *p, int *enabled)
 {
 	int fc = file_console();
 	int con = fc > 0 ? fc : fc < 0 ? CON_NONE : console_of(core, rom, base_w);
@@ -248,17 +277,15 @@ static int g_options_set;    /* this game's mGBA options have been set */
 static int g_running;        /* between diatom_shading_start and _end */
 static int g_on;             /* the shader is drawing this game */
 static int g_cur_con;        /* the console this game was placed as */
-static pt_params g_cur;      /* and the settings it is drawn with */
+static float g_cur[MAXP];    /* and the settings it is drawn with */
 static char g_core[1024], g_rom[1024];
 static int  g_base_w;
 
 void diatom_shading_prepare(const char *core, const char *rom)
 {
 	const char *dot = rom ? strrchr(rom, '.') : NULL;
-	int enabled;
-	pt_params p;
-
-	int con;
+	int enabled, con;
+	float p[MAXP];
 
 	g_options_set = 0;
 	g_running = 0;
@@ -266,9 +293,9 @@ void diatom_shading_prepare(const char *core, const char *rom)
 	 * launcher or its extension, can be placed; otherwise it waits for its
 	 * size (diatom_shading_start). */
 	if (file_console() == CON_NONE && (!dot || !strcasecmp(dot, ".zip"))) return;
-	con = choose(core, rom, 0, &p, &enabled);
+	con = choose(core, rom, 0, p, &enabled);
 	if (con != CON_NONE && enabled) {
-		core_options(con, &p);
+		core_options(con, p);
 		g_options_set = 1;
 	}
 }
@@ -276,15 +303,15 @@ void diatom_shading_prepare(const char *core, const char *rom)
 void diatom_shading_start(const char *core, const char *rom, int base_w)
 {
 	int enabled, con;
-	pt_params p;
+	float p[MAXP];
 
 	snprintf(g_core, sizeof g_core, "%s", core ? core : "");
 	snprintf(g_rom, sizeof g_rom, "%s", rom ? rom : "");
 	g_base_w = base_w;
 	g_running = 1;
-	con = choose(core, rom, base_w, &p, &enabled);
+	con = choose(core, rom, base_w, p, &enabled);
 	g_cur_con = con;
-	g_cur = p;
+	memcpy(g_cur, p, sizeof g_cur);
 	g_on = con != CON_NONE && enabled;
 	if (con == CON_NONE) {
 		diatom_port_shader(DIATOM_SHADER_NONE, NULL, 0);
@@ -293,11 +320,12 @@ void diatom_shading_start(const char *core, const char *rom, int base_w)
 	/* Options not yet set (a zip's, now its console is known, or a change):
 	 * mGBA takes them on the next frame. */
 	if (enabled && !g_options_set) {
-		core_options(con, &p);
+		core_options(con, p);
 		g_options_set = 1;
 	}
-	printf("diatom: shader for %s: %s\n", CON_NAME[con], enabled ? "PT SkyWalker541" : "off");
-	diatom_port_shader(enabled ? DIATOM_SHADER_PT : DIATOM_SHADER_NONE, p.v, PT_NPARAMS);
+	printf("diatom: shader for %s: %s\n", CON_NAME[con], enabled ? cs_name(CON_KIND[con]) : "off");
+	diatom_port_shader(enabled ? (diatom_shader)CON_KIND[con] : DIATOM_SHADER_NONE, p,
+	                   cs_nparams(CON_KIND[con]));
 }
 
 void diatom_shading_set_file(const char *path)
@@ -310,13 +338,13 @@ void diatom_shading_set_file(const char *path)
 	g_options_set = 0;
 	{
 		int enabled;
-		pt_params p;
+		float p[MAXP];
 		int con = choose(g_core[0] ? g_core : NULL, g_rom[0] ? g_rom : NULL, g_base_w,
-		                 &p, &enabled);
+		                 p, &enabled);
 		if (con != CON_NONE && enabled) {
-			int was = (int)(g_cur.v[PT_GAME_SYSTEM] + 0.5f);
-			int now = (int)(p.v[PT_GAME_SYSTEM] + 0.5f);
-			if (!g_on || was != now) core_options(con, &p);
+			int was = (int)(g_cur[PT_GAME_SYSTEM] + 0.5f);
+			int now = (int)(p[PT_GAME_SYSTEM] + 0.5f);
+			if (!g_on || con != g_cur_con || was != now) core_options(con, p);
 			g_options_set = 1;
 		}
 	}
@@ -333,7 +361,9 @@ void diatom_shading_end(void)
 
 int diatom_shading_current(float *params)
 {
+	int kind;
 	if (!g_running || !g_on) return 0;
-	if (params) memcpy(params, g_cur.v, sizeof g_cur.v);
-	return 1;
+	kind = CON_KIND[g_cur_con];
+	if (params) memcpy(params, g_cur, (size_t)cs_nparams(kind) * sizeof *params);
+	return kind;
 }

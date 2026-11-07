@@ -12,7 +12,12 @@ CFLAGS  := -std=gnu11 -Wall -Wextra
 SRC     := $(PT)/pt_shader.c
 HDRS    := $(PT)/pt_shader.h $(PT)/pt_math.h ppm.h
 
-all: glref ptc ptref ptref_flat frames refs
+all: glref ptc ptref ptref_flat othc frames refs
+
+# crt-lottes-fast and lcd3x (ChaOS)
+OTH     := ../../shaders/crt/crts.c ../../shaders/lcd/lcd3x.c
+othc: othc.c $(OTH) ../../shaders/crt/crts.h ../../shaders/lcd/lcd3x.h ppm.h
+	$(CC) $(PTFLAGS) $(CFLAGS) -I$(PT) -I../../shaders/crt -I../../shaders/lcd -o $@ othc.c $(OTH) -lm
 
 glref: glref.c ppm.h
 	$(CC) -O2 $(CFLAGS) -o $@ glref.c -lEGL -lGLESv2
@@ -41,11 +46,12 @@ check: all
 	python3 mkref.py --check
 	sh sweep.sh gl
 	sh sweep.sh fast
+	sh othsweep.sh
 
 check-arm: all ptc_a53
 	PTC="qemu-aarch64 ./ptc_a53" sh sweep.sh fast
 
 clean:
-	rm -f glref ptc ptref ptref_flat ptc_a53 frames refs *.ppm *.glsl *.log
+	rm -f glref ptc ptref ptref_flat othc ptc_a53 frames refs *.ppm *.glsl *.log
 
 .PHONY: all check check-arm clean
