@@ -44,6 +44,7 @@
 #include "ladder.h"
 #include "port_clock.h"
 #include "port_cpufreq.h"
+#include "shade.h"
 
 #define AUDIO_RATE 48000
 /* Capacity in FRAMES (one frame = two int16 samples). 4096 at 48kHz is ~85ms,
@@ -651,6 +652,11 @@ static bool      g_ov_live;          /* drawn this frame: decided once, in prese
 static int ov_x0(void) { return ((int)g_vinfo.xres - g_ov_w) / 2; }
 static int ov_y0(void) { return (int)g_vinfo.yres - g_ov_h - (int)g_vinfo.yres / 24; }
 
+void diatom_port_shader(diatom_shader kind, const float *params, int nparams)
+{
+	shade_set(kind, params, nparams);
+}
+
 void diatom_port_overlay(const uint8_t *bgra, int w, int h, unsigned ms)
 {
 	if (!bgra || ms == 0 || w <= 0 || h <= 0) {
@@ -1113,6 +1119,7 @@ bool diatom_port_init(diatom_port_caps *out)
 
 void diatom_port_shutdown(void)
 {
+	shade_shutdown();
 	if (g_flip_running) {
 		pthread_mutex_lock(&g_flip_mx);
 		g_flip_stop = true;
@@ -1405,6 +1412,29 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 		uy0 = ov_y0();
 		ux0 = ov_x0();
 		for (i = 0; i < n; i++) g_ov_under[i] = opaque;
+	}
+
+	/* Shaded (ChaOS): at a whole-number scale with the picture wholly on the
+	 * panel, the shader draws the rect itself, in place of the rows below.
+	 * Anything else, or a shader that declines, falls through to them. */
+	if (dst.x >= 0 && dst.y >= 0 && dst.x + dst.w <= (int)g_vinfo.xres &&
+	    dst.y + dst.h <= (int)g_vinfo.yres && dst.w % w == 0 && dst.h % h == 0 &&
+	    dst.w / w == dst.h / h &&
+	    shade_frame(src, w, h, pitch, fmt, dst.w / w,
+	                (uint32_t *)(page + (size_t)dst.y * g_finfo.line_length) + dst.x,
+	                g_finfo.line_length / sizeof(uint32_t), ro, go, bo, opaque)) {
+		/* What a notice will need to put back, read from the page: the
+		 * shader writes straight to it, with no row in ordinary memory to
+		 * copy from as below. A few rows, while a notice shows. */
+		if (under) {
+			int ya = y0 > uy0 ? y0 : uy0, yb = y1 < uy0 + g_ov_h ? y1 : uy0 + g_ov_h;
+			int a = x0 > ux0 ? x0 : ux0, b = x1 < ux0 + g_ov_w ? x1 : ux0 + g_ov_w;
+			for (y = ya; y < yb && b > a; y++)
+				memcpy(g_ov_under + (size_t)(y - uy0) * (size_t)g_ov_w + (a - ux0),
+				       (uint32_t *)(page + (size_t)y * g_finfo.line_length) + a,
+				       (size_t)(b - a) * sizeof(uint32_t));
+		}
+		return;
 	}
 
 	for (y = y0; y < y1; y++) {

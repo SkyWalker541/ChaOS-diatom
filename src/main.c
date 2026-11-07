@@ -23,6 +23,7 @@
 #include "cheevos.h"
 #include "diatom.h"
 #include "levels.h"
+#include "shading.h"
 
 /* --- the frame the core last handed us ----------------------------------- */
 static void       *g_frame;
@@ -485,8 +486,21 @@ static const char *filter_name(diatom_filter f)
 	return f == DIATOM_FILTER_SHARP ? "sharp" : "nearest";
 }
 
+/* ChaOS draws at whole-number scales only: every mode asked for becomes
+ * "integer", so pixels stay square and even, and a shader's grid lines up
+ * with them. The launcher's Display Mode setting is left in place for now
+ * and has no effect. */
+static int integer_mode(void)
+{
+	int i;
+	for (i = 0; i < diatom_mode_count; i++)
+		if (diatom_modes[i].mode == DIATOM_SCALE_INTEGER) return i;
+	return 0;
+}
+
 static void apply_display(int mode, diatom_filter filter)
 {
+	mode     = integer_mode();
 	g_mode   = mode;
 	g_filter = filter;
 	g_dst = diatom_scale_rect(diatom_modes[mode].mode, g_base_w, g_base_h,
@@ -1333,6 +1347,7 @@ static int run_session_inner(const diatom_session *sn)
 	g_base_h      = (int)av.geometry.base_height;
 	g_base_aspect = (double)av.geometry.aspect_ratio;
 	apply_display(sn->mode, sn->filter);
+	diatom_shading_start(sn->core, sn->rom, g_base_w);
 	locked_at = 0;
 
 	/* Pace against a monotonic clock at the core's own rate, on an ABSOLUTE

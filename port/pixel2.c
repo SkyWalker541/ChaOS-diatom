@@ -1234,6 +1234,14 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 	pthread_mutex_unlock(&g_mx);
 }
 
+/* Shaders (ChaOS) are drawn by the CPU ports for now; this one draws with the
+ * GPU and will run them as GLSL. Until then every frame is drawn plainly,
+ * which the interface allows. */
+void diatom_port_shader(diatom_shader kind, const float *params, int nparams)
+{
+	(void)kind; (void)params; (void)nparams;
+}
+
 void diatom_port_overlay(const uint8_t *bgra, int w, int h, unsigned ms)
 {
 	pthread_mutex_lock(&g_mx);

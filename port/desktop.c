@@ -12,11 +12,13 @@
  * directory on the include path, and this is the form SDL documents. */
 #include <SDL.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <pthread.h>
 #include <string.h>
 
 #include "diatom_port.h"
 #include "port_clock.h"
+#include "shade.h"
 
 #define WINDOW_W 960
 #define WINDOW_H 720
@@ -210,6 +212,7 @@ bool diatom_port_init(diatom_port_caps *out)
 
 void diatom_port_shutdown(void)
 {
+	shade_shutdown();
 	if (g_audio)    SDL_CloseAudioDevice(g_audio);
 	if (g_texture)  SDL_DestroyTexture(g_texture);
 	if (g_renderer) SDL_DestroyRenderer(g_renderer);
@@ -300,12 +303,79 @@ static void draw_overlay(void)
 	SDL_RenderCopy(g_renderer, g_ov_tex, NULL, &r);
 }
 
+/* Shaders (ChaOS). A shaded frame is drawn at screen size into g_shade_buf
+ * and shown through its own texture. DIATOM_SHADE_DUMP=<file.ppm> writes one
+ * shaded frame to a file, the DIATOM_SHADE_DUMP_FRAME'th (60 by default), so
+ * the Brick's shading can be looked at from a desktop. */
+static SDL_Texture *g_shade_tex;
+static uint32_t    *g_shade_buf;
+static int          g_shade_w, g_shade_h;
+static bool         g_shaded_last;
+
+void diatom_port_shader(diatom_shader kind, const float *params, int nparams)
+{
+	shade_set(kind, params, nparams);
+}
+
+static void shade_dump(void)
+{
+	static long n;
+	const char *path = getenv("DIATOM_SHADE_DUMP");
+	const char *at = getenv("DIATOM_SHADE_DUMP_FRAME");
+	FILE *f;
+	int i;
+
+	if (!path || ++n != (at ? atol(at) : 60)) return;
+	if (!(f = fopen(path, "wb"))) return;
+	fprintf(f, "P6\n%d %d\n255\n", g_shade_w, g_shade_h);
+	for (i = 0; i < g_shade_w * g_shade_h; i++) {
+		uint32_t c = g_shade_buf[i];
+		fputc((int)((c >> 16) & 255), f); fputc((int)((c >> 8) & 255), f); fputc((int)(c & 255), f);
+	}
+	fclose(f);
+	diatom_port_log(DIATOM_LOG_INFO, "shade: frame written to DIATOM_SHADE_DUMP");
+}
+
+static bool present_shaded(const void *src, int w, int h, size_t pitch,
+                           diatom_pixfmt fmt, diatom_rect dst)
+{
+	SDL_Rect r;
+
+	if (!src) {
+		if (!g_shaded_last) return false;     /* a dupe of a plain frame */
+	} else {
+		if (!shade_active() || w <= 0 || h <= 0 || dst.x < 0 || dst.y < 0 ||
+		    dst.w % w || dst.h % h || dst.w / w != dst.h / h) return g_shaded_last = false;
+		if (dst.w != g_shade_w || dst.h != g_shade_h || !g_shade_tex) {
+			uint32_t *b = realloc(g_shade_buf, sizeof *b * (size_t)dst.w * dst.h);
+			if (!b) return g_shaded_last = false;
+			g_shade_buf = b;
+			if (g_shade_tex) SDL_DestroyTexture(g_shade_tex);
+			g_shade_tex = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_ARGB8888,
+			                                SDL_TEXTUREACCESS_STREAMING, dst.w, dst.h);
+			if (!g_shade_tex) return g_shaded_last = false;
+			g_shade_w = dst.w; g_shade_h = dst.h;
+		}
+		if (!shade_frame(src, w, h, pitch, fmt, dst.w / w, g_shade_buf, (size_t)dst.w,
+		                 16, 8, 0, 0xff000000u)) return g_shaded_last = false;
+		SDL_UpdateTexture(g_shade_tex, NULL, g_shade_buf, dst.w * 4);
+		shade_dump();
+	}
+	SDL_RenderClear(g_renderer);
+	r.x = dst.x; r.y = dst.y; r.w = dst.w; r.h = dst.h;
+	SDL_RenderCopy(g_renderer, g_shade_tex, NULL, &r);
+	draw_overlay();
+	SDL_RenderPresent(g_renderer);
+	return g_shaded_last = true;
+}
+
 void diatom_port_present(const void *src, int w, int h, size_t pitch,
                          diatom_pixfmt fmt, diatom_rect dst,
                          diatom_filter filter)
 {
 	SDL_Rect r;
 
+	if (present_shaded(src, w, h, pitch, fmt, dst)) return;
 	if (w > 0 && h > 0 && !ensure_texture(w, h, fmt, filter)) return;
 	if (src && g_texture) SDL_UpdateTexture(g_texture, NULL, src, (int)pitch);
 

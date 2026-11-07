@@ -135,8 +135,9 @@ check("identity clears turbo too", drain(), ["MAP\tmap=identity"])
 # Display mode. RUNNING already emitted one, so drain before asking.
 drain(0.5)
 send("DISPLAY"); got = drain()
+# ChaOS: every mode asked for is drawn as "integer", the default included.
 check_that("display reports mode, filter and rect",
-           len(got) == 1 and got[0].startswith("DISPLAY\tmode=stretch\tfilter=nearest\trect="),
+           len(got) == 1 and got[0].startswith("DISPLAY\tmode=integer\tfilter=nearest\trect="),
            got)
 check_that("and the surface the rect is measured in",
            len(got) == 1 and "\tsurface=" in got[0] and "surface=0x" not in got[0],
@@ -153,6 +154,11 @@ check("unknown mode refused, nothing changes", got,
 send("DISPLAY"); got = drain()
 check_that("still on integer after the refusal",
            len(got) == 1 and got[0].startswith("DISPLAY\tmode=integer"), got)
+
+send("SETDISPLAY\tmode=stretch"); got = drain()
+check_that("any other mode is drawn as integer (ChaOS)",
+           len(got) == 1 and got[0].startswith("DISPLAY\tmode=integer\tfilter=nearest\trect="),
+           got)
 
 send("SETDISPLAY\tmode=aspect\tfilter=bogus"); got = drain()
 check("bad filter refuses the whole message", got,
