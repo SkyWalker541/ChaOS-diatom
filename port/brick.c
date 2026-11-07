@@ -1477,10 +1477,20 @@ static void bezel_band(void *ctx, int r0, int r1)
 	}
 }
 
-/* Is the bezel to be laid over the picture this frame? Readies its runs. */
+/* Is the bezel to be laid over the picture this frame? Readies its runs.
+ *
+ * Never, for now: an overlay is drawn around the picture and not over it.
+ * Overlays made for other systems cast a shadow or a tint into the game's
+ * window, and laying that over every frame cost the Brick enough time to
+ * break up the sound; the shader draws its own edge shadow and screen
+ * anyway. Margins cost nothing per frame (they are painted once per page).
+ * The blend below stays for an overlay that is meant to be over the game, if
+ * one is ever offered. */
+static bool g_bz_inside = false;
+
 static bool bezel_over(diatom_rect dst, int x0, int x1, int y0, int y1)
 {
-	if (!g_bz) return false;
+	if (!g_bz || !g_bz_inside) { g_bz_any = false; return false; }
 	if (!g_bz_runs_ok || memcmp(&dst, &g_bz_dst, sizeof dst))
 		bezel_runs(dst, x0, x1, y0, y1);
 	return g_bz_runs_ok && g_bz_any;
@@ -1660,7 +1670,7 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 		diatom_tap ty = g_rowmap[y - dst.y];
 		uint32_t *row = (uint32_t *)(page + (size_t)y * g_finfo.line_length);
 		bool band = under && y >= uy0 && y < uy0 + g_ov_h;
-		bool bz = g_bz && g_bz_runs_ok && bezel_row_has(y) &&
+		bool bz = g_bz && g_bz_inside && g_bz_runs_ok && bezel_row_has(y) &&
 		          (int)g_vinfo.xres <= UNDER_ROW_MAX;
 		uint32_t *out = band || bz ? g_under_row : row;
 		const uint32_t *c0 = cache_row(src, pitch, fmt, ty.idx, w);
