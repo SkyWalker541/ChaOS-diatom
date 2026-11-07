@@ -20,6 +20,8 @@ CFLAGS  += -Iinclude -Isrc -Iport -Ishaders/pt -Ivendor/rcheevos/include
 # serialize_size() into a call to a different function entirely and made state
 # saving report "no state" while every freshly built file was correct.
 CFLAGS  += -MMD -MP
+# ChaOS: this build's version, from the VERSION file
+CFLAGS  += -DCHAOS_DIATOM_VERSION='"$(shell cat VERSION 2>/dev/null || echo 0.0)"' 
 # zlib for zipped ROMs (src/zip.c), on every port
 LDFLAGS += -lz
 

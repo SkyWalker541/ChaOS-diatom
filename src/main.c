@@ -24,6 +24,10 @@
 #include "diatom.h"
 #include "levels.h"
 #include "shading.h"
+
+#ifndef CHAOS_DIATOM_VERSION
+#define CHAOS_DIATOM_VERSION "0.0"   /* from the VERSION file, by the Makefile */
+#endif
 #include "pt_shader.h"
 
 /* --- the frame the core last handed us ----------------------------------- */
@@ -2120,6 +2124,14 @@ int main(int argc, char **argv)
 	diatom_filter start_filter;
 	long limit = 0;
 	int i, start_mode = -1, console = 0;
+
+	/* ChaOS: which build this is, first in every log. */
+	for (i = 1; i < argc; i++)
+		if (!strcmp(argv[i], "--version")) {
+			printf("ChaOS-diatom %s, from diatom c52c347\n", CHAOS_DIATOM_VERSION);
+			return 0;
+		}
+	printf("diatom: ChaOS-diatom %s, from diatom c52c347\n", CHAOS_DIATOM_VERSION);
 
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--core") && i + 1 < argc) core_path = argv[++i];
