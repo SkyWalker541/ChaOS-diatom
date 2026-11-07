@@ -23,10 +23,17 @@
  *
  *     Lines before any [section] apply to every console; a console's own
  *     section wins over them. An unknown name is logged and skipped.
+ *   - With the shader on, the shader is the whole look, so mGBA's own colour
+ *     settings follow the shader README's "Emulator core settings" for the
+ *     Game system in use: colour correction, interframe blending and, for a
+ *     Game Boy, no colourization (its four plain greys). With the shader off,
+ *     the launcher's settings stand. Set for that game only: options set here
+ *     lapse when it ends (options.c).
  *
  * DIATOM_PT_CFG names another file instead, for the desktop.
  */
 #include "shading.h"
+#include "diatom.h"
 #include "diatom_port.h"
 #include "pt_shader.h"
 
@@ -154,17 +161,82 @@ static void read_cfg(int con, pt_params *p, int *enabled)
 	printf("diatom: pt.cfg read from %s\n", path);
 }
 
-void diatom_shading_start(const char *core, const char *rom, int base_w)
+/* The shader README's "Emulator core settings", as mGBA's options, for the
+ * Game system the shader is set to (Manual takes the console's own):
+ *
+ *   Game system        Color correction   Interframe blending
+ *   1 Game Boy         off                off                 and no colourization
+ *   2 Game Boy Color   GBC                off
+ *   3 GBA SP           GBA                Smart
+ *   4 GBA Original     GBA                LCD ghosting (accurate)
+ */
+static void core_options(int con, const pt_params *p)
 {
-	int con = console_of(core, rom, base_w), enabled = 1;
+	int sys = (int)(p->v[PT_GAME_SYSTEM] + 0.5f);
+	const char *cc, *blend;
+
+	if (sys < 1 || sys > 4) sys = con == CON_GB ? 1 : con == CON_GBC ? 2 : 4;
+	switch (sys) {
+	case 1:  cc = "OFF"; blend = "OFF";          break;
+	case 2:  cc = "GBC"; blend = "OFF";          break;
+	case 3:  cc = "GBA"; blend = "mix_smart";    break;
+	default: cc = "GBA"; blend = "lcd_ghosting"; break;
+	}
+	diatom_options_set("mgba_color_correction", cc);
+	diatom_options_set("mgba_interframe_blending", blend);
+	if (sys == 1) {
+		diatom_options_set("mgba_gb_colors", "Grayscale");
+		diatom_options_set("mgba_gb_colors_preset", "0");
+	}
+	printf("diatom: mGBA set for the shader: color correction %s, interframe blending %s%s\n",
+	       cc, blend, sys == 1 ? ", no colourization" : "");
+}
+
+/* What the shader is for this game: the console, its settings, and whether it
+ * is on. CON_NONE when the game is not one of the three. */
+static int choose(const char *core, const char *rom, int base_w, pt_params *p, int *enabled)
+{
+	int con = console_of(core, rom, base_w);
+
+	*enabled = 0;
+	if (con == CON_NONE) return CON_NONE;
+	*enabled = 1;
+	recommended(con, p);
+	read_cfg(con, p, enabled);
+	return con;
+}
+
+static int g_options_set;    /* this game's mGBA options were set before it loaded */
+
+void diatom_shading_prepare(const char *core, const char *rom)
+{
+	const char *dot = rom ? strrchr(rom, '.') : NULL;
+	int enabled;
 	pt_params p;
 
+	g_options_set = 0;
+	/* Before the game loads, only a ROM whose extension names its console
+	 * can be placed; a zip waits for its size (diatom_shading_start). */
+	if (!dot || !strcasecmp(dot, ".zip")) return;
+	if (choose(core, rom, 0, &p, &enabled) != CON_NONE && enabled) {
+		core_options(console_of(core, rom, 0), &p);
+		g_options_set = 1;
+	}
+}
+
+void diatom_shading_start(const char *core, const char *rom, int base_w)
+{
+	int enabled, con;
+	pt_params p;
+
+	con = choose(core, rom, base_w, &p, &enabled);
 	if (con == CON_NONE) {
 		diatom_port_shader(DIATOM_SHADER_NONE, NULL, 0);
 		return;
 	}
-	recommended(con, &p);
-	read_cfg(con, &p, &enabled);
+	/* A zip's options, now its console is known: mGBA takes them on the next
+	 * frame. */
+	if (enabled && !g_options_set) core_options(con, &p);
 	printf("diatom: shader for %s: %s\n", CON_NAME[con], enabled ? "PT SkyWalker541" : "off");
 	diatom_port_shader(enabled ? DIATOM_SHADER_PT : DIATOM_SHADER_NONE, p.v, PT_NPARAMS);
 }
