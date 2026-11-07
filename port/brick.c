@@ -84,6 +84,17 @@ static bool             g_flip_running;
  * gets to choose what is on glass if it is the one putting it there. */
 static bool             g_presented;
 
+/* Pages the launcher may have drawn into since this port last drew them
+ * (ChaOS). The launcher renders into the same framebuffer (see
+ * diatom_port_present_stop), and a frame only ever redraws its own rect, so
+ * at a whole-number scale the margins around the picture kept the launcher's
+ * shelf and menus: its ground colour and lines, under and beside the game.
+ * Stretch never showed it, as it covers the panel. So the first frame drawn
+ * into each page after a handover wipes that page to black first. Per page
+ * and when drawn into, not all at once, so the page on glass is never
+ * blanked under the viewer. */
+static bool             g_page_stale[FB_PAGES];
+
 static SDL_AudioDeviceID g_audio;
 static int               g_pad_fd = -1;  /* "Brick Gamepad": every button */
 static bool              g_quit;
@@ -1477,6 +1488,23 @@ static void clear_pages(void)
 	for (i = 0; i < n; i++) p[i] = g_opaque;
 }
 
+/* Wipe a page the launcher may have drawn into, before drawing a frame into
+ * it: see g_page_stale. What was painted on it is gone with it. */
+static void wipe_if_stale(int page)
+{
+	uint32_t *q;
+	size_t n, i;
+
+	if (page < 0 || page >= FB_PAGES || !g_page_stale[page]) return;
+	q = (uint32_t *)page_base(page);
+	n = (size_t)g_vinfo.yres * g_finfo.line_length / sizeof *q;
+	for (i = 0; i < n; i++) q[i] = g_opaque;
+	g_osd_painted[page] = false;
+	g_dot_painted[page] = false;
+	memset(&g_ov_painted[page], 0, sizeof g_ov_painted[page]);
+	g_page_stale[page] = false;
+}
+
 void diatom_port_present(const void *src, int w, int h, size_t pitch,
                          diatom_pixfmt fmt, diatom_rect dst,
                          diatom_filter filter)
@@ -1548,7 +1576,15 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 
 	g_ov_live = g_ov && diatom_port_now_us() < g_ov_until;
 
+	/* The first frame after a handover: every page may hold the launcher's
+	 * drawing. */
+	if (!g_presented) {
+		int p;
+		for (p = 0; p < FB_PAGES; p++) g_page_stale[p] = true;
+	}
+
 	if (g_pan_broken) {
+		wipe_if_stale(g_front);
 		blit(page_base(g_front), src, w, h, pitch, fmt, dst);
 		if (diatom_port_now_us() < g_osd_until) {
 			draw_gain_bar(page_base(g_front));
@@ -1584,6 +1620,8 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 	pthread_mutex_unlock(&g_flip_mx);
 
 	if (g_present_debug) t0 = diatom_port_now_us();
+
+	wipe_if_stale(page);
 
 	blit(page_base(page), src, w, h, pitch, fmt, dst);
 	/* Painted, or unpainted. A page keeps whatever was last written outside
