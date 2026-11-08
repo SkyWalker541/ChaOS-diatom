@@ -182,6 +182,7 @@ typedef enum {
 	DIATOM_MSG_PREMAP,     /* the launcher has drawn: map the cores now */
 	DIATOM_MSG_LOWBATTERY,   /* report whether the low-battery disc is shown */
 	DIATOM_MSG_SETLOWBATTERY,/* show it over the game, or not: `on`, `blink` */
+	DIATOM_MSG_SETREWIND,  /* ChaOS: keep states to rewind to, `on` = 1 | 0 */
 	/* The launcher went away - or was displaced by a newer one, which means
 	 * the same thing. The game keeps running. */
 	DIATOM_MSG_HANGUP

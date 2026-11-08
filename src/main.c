@@ -24,6 +24,7 @@
 #include "diatom.h"
 #include "levels.h"
 #include "shading.h"
+#include "rewind.h"
 
 #ifndef CHAOS_DIATOM_VERSION
 #define CHAOS_DIATOM_VERSION "0.0"   /* from the VERSION file, by the Makefile */
@@ -878,6 +879,7 @@ static bool menu_pause(const diatom_session *sn)
 			                  m.path);
 			break;
 		case DIATOM_MSG_LOAD:
+			rewind_reset();
 			diatom_proto_send(diatom_state_load(g_core, m.path)
 			                  ? "LOADED\tpath=%s" : "ERROR\tcode=state_rejected\tmsg=%s",
 			                  m.path);
@@ -886,6 +888,7 @@ static bool menu_pause(const diatom_session *sn)
 			/* The menu's Reset row. The game stays paused - the launcher
 			 * still owns the display and sends RESUME when it is done. */
 			g_core->reset();
+			rewind_reset();
 			/* Same reason as a state load, one step further: the game is
 			 * back at the title screen and nothing in progress survived. */
 			diatom_cheevos_runtime_reset();
@@ -1252,6 +1255,10 @@ static bool state_plane_msg(const diatom_msg *m)
 	case DIATOM_MSG_SETAUDIO: audio_set(m);      return true;
 	case DIATOM_MSG_MUTE:     mute_emit();       return true;
 	case DIATOM_MSG_SETMUTE:  mute_set(m);       return true;
+	case DIATOM_MSG_SETREWIND:
+		rewind_set(m->on == 1);
+		diatom_proto_send("REWIND\ton=%d", rewind_on() ? 1 : 0);
+		return true;
 	case DIATOM_MSG_QUIET:    quiet_emit();      return true;
 	case DIATOM_MSG_SETQUIET: quiet_set(m);      return true;
 	case DIATOM_MSG_LOWBATTERY:    low_battery_emit(); return true;
@@ -1363,6 +1370,7 @@ static int run_session_inner(const diatom_session *sn)
 	/* Per-game state that must not carry over from the previous session. */
 	g_speed = 1;
 	g_audio_fast = false;
+	rewind_reset();
 	g_present_frames = 0;
 	g_present_us = 0;
 	g_frame_w = g_frame_h = 0;
@@ -1656,7 +1664,21 @@ static int run_session_inner(const diatom_session *sn)
 		 * before, measured 2026-10-27. Each cost is now the whole step's, on
 		 * the wall clock, as the old rule's always was. */
 		const bool skips = fast && diatom_env_frame_skippable();
-		for (;;) {
+		/* Rewind (ChaOS): MENU+L1 held steps the game back one saved state a
+		 * turn, shown with one frame run from it, in silence (rewind.h) */
+		const uint32_t rw_held = DIATOM_BIT(DIATOM_BTN_MENU) | DIATOM_BIT(DIATOM_BTN_L1);
+		const bool rewinding = rewind_on() &&
+		                       (diatom_port_input_state() & rw_held) == rw_held;
+		if (rewinding) {
+			g_audio_fast = true;
+			diatom_env_frame_shown(true);
+			if (rewind_step(g_core)) {
+				g_core->run();
+				frames++;
+			}
+			ran = 1;
+		}
+		for (; !rewinding;) {
 			bool     shown = true;
 			uint64_t s0 = diatom_port_now_us();
 			double   cost;
@@ -1677,6 +1699,7 @@ static int run_session_inner(const diatom_session *sn)
 			 * here, and not over a socket at 10Hz. Every frame the game runs,
 			 * fast or not. */
 			diatom_cheevos_frame();
+			rewind_after_frame(g_core);
 
 			/* A running average, an eighth new, of each kind. The first one
 			 * measured seeds both, so the first fast turn has a figure. */
@@ -1700,7 +1723,7 @@ static int run_session_inner(const diatom_session *sn)
 		step_frames += ran;
 		step_periods += periods;
 
-		if (fast) {
+		if (fast || rewinding) {
 			/* Silence for the time this turn stands for, so the queue holds
 			 * its target and the rate control never sees fast forward. At the
 			 * rate the resampler is using, which is not always the announced
@@ -1806,12 +1829,14 @@ static int run_session_inner(const diatom_session *sn)
 				                  : "ERROR\tcode=save_failed\tmsg=%s", m.path);
 				break;
 			case DIATOM_MSG_LOAD:
+				rewind_reset();
 				diatom_proto_send(diatom_state_load(g_core, m.path)
 				                  ? "LOADED\tpath=%s"
 				                  : "ERROR\tcode=state_rejected\tmsg=%s", m.path);
 				break;
 			case DIATOM_MSG_RESET:
 				g_core->reset();
+				rewind_reset();
 				/* Same reason as a state load, one step further: the game
 				 * is back at the title screen and nothing in progress
 				 * survived. */
@@ -1843,7 +1868,8 @@ static int run_session_inner(const diatom_session *sn)
 		/* R1 belongs to MENU+R1 from the moment MENU is down - not from when
 		 * R1 is, so the frame R1 goes down cannot leak into the game - and
 		 * stays hidden after MENU is let go, until R1 is too. */
-		if (buttons & DIATOM_BIT(DIATOM_BTN_MENU)) chord_hold = DIATOM_BIT(DIATOM_BTN_R1);
+		if (buttons & DIATOM_BIT(DIATOM_BTN_MENU))
+			chord_hold = DIATOM_BIT(DIATOM_BTN_R1) | DIATOM_BIT(DIATOM_BTN_L1);
 		else                                       chord_hold &= buttons;
 
 		/* The single writer. Every reason to hide a button from the core is
@@ -1866,6 +1892,11 @@ static int run_session_inner(const diatom_session *sn)
 			if (levels_moved() && (buttons & DIATOM_BIT(DIATOM_BTN_MENU)))
 				menu_chorded = true;
 
+			/* MENU+L1 is rewind (above, in the frame loop): a chord, so
+			 * letting go of MENU after it does not open the menu */
+			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
+			    (buttons & DIATOM_BIT(DIATOM_BTN_L1)) && rewind_on())
+				menu_chorded = true;
 			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
 			    (pressed & DIATOM_BIT(DIATOM_BTN_R1))) {
 				step_report(g_speed, step_frames, step_periods,
