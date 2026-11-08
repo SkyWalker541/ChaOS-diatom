@@ -1,12 +1,14 @@
 /* The CPU shaders, one interface (ChaOS).
  *
- * ChaOS-diatom draws three shaders with the CPU, each for the consoles it
+ * ChaOS-diatom draws four shaders with the CPU, each for the consoles it
  * suits (the launcher shows each console only its own):
  *
  *   CS_PT    PT SkyWalker541 (shaders/pt)        Game Boy, Color, Advance
  *   CS_CRT   crt-lottes-fast (shaders/crt)       NES, SNES, Genesis, Master
  *                                                System, PC Engine
  *   CS_LCD   lcd3x (shaders/lcd)                 Game Gear, Neo Geo Pocket
+ *   CS_SCAN  res-independent-scanlines           the CRT consoles, a lighter
+ *            (shaders/scan)                      choice than crt-lottes-fast
  *
  * Each is drawn the same way - a frame begun once, then its screen rows in
  * bands from any number of threads, each with its own cs_band - so the
@@ -21,7 +23,7 @@
 
 #include "pt_shader.h"     /* pt_format */
 
-enum { CS_NONE, CS_PT, CS_CRT, CS_LCD, CS_KINDS };
+enum { CS_NONE, CS_PT, CS_CRT, CS_LCD, CS_SCAN, CS_KINDS };
 
 typedef struct cs_ctx cs_ctx;
 typedef struct cs_band cs_band;

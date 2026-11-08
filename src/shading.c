@@ -6,11 +6,16 @@
  *         nes sms md pce sfc     crt-lottes-fast
  *         gg ngp ngpc            lcd3x
  *
+ * and a CRT console may have the lighter of two instead: `style = scanlines`
+ * in its settings gives it res-independent-scanlines (shaders/scan), which
+ * costs the CPU a tenth of what crt-lottes-fast does.
+ *
  * The launcher decides. Before each RUN it sends SETSHADER with a small file
  * of the settings for that game's console, written from its Shaders menu:
  *
  *         console = gbc          the console's tag, lower case
  *         enabled = 1            on, or 0 for off
+ *         style = scanlines      a CRT console's lighter shader (optional)
  *         PT_PIXEL_EFFECT = 2    any of its shader's parameters, by GLSL name
  *
  * and sends it again whenever they change in the in-game menu, which applies
@@ -40,6 +45,7 @@
 #include "diatom_port.h"
 #include "pt_shader.h"
 #include "cpu_shader.h"
+#include "scanlines.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -99,13 +105,13 @@ static int console_of(const char *core, const char *rom, int base_w)
  * color per console. GBA is the original, unlit model, whose screen is the one
  * this shader recreates; pt.cfg turns it into an SP (3, and Backing color 3).
  *
- * crt-lottes-fast: its own defaults, but flat (CURVATURE 0): the picture sits
+ * The scanlines: Automatic Scale on. crt-lottes-fast: its own defaults, but flat (CURVATURE 0): the picture sits
  * in a frame on the Brick, square-cornered, and a flat screen costs the CPU
  * half what a curved one does. The launcher's recommended settings are the
  * same (chaos src/look.c). lcd3x: its own defaults. */
-static void recommended(int con, float *p)
+static void recommended(int con, int kind, float *p)
 {
-	int kind = CON_KIND[con], i;
+	int i;
 
 	for (i = 0; i < cs_nparams(kind); i++) p[i] = cs_param_def(kind, i);
 	switch (con) {
@@ -114,6 +120,9 @@ static void recommended(int con, float *p)
 	case CON_GBA: p[PT_GAME_SYSTEM] = 4; p[PT_BACKING_COLOR] = 2; break;
 	}
 	if (kind == CS_CRT) p[cs_param_index(CS_CRT, "CURVATURE")] = 0.0f;
+	/* the scanlines at the game's own height, one dark line a game row,
+	 * where the GLSL's default is a fixed 224 lines whatever the game */
+	if (kind == CS_SCAN) p[SCAN_AUTOSCALE] = 1.0f;
 }
 
 static char *trim(char *s)
@@ -153,9 +162,19 @@ static int cfg_path(char *out, size_t cap)
 	return 1;
 }
 
+/* The shader a console's games get: its own, or for a CRT console with
+ * `style = scanlines`, the scanlines. */
+static int kind_for(int con, const char *style)
+{
+	if (CON_KIND[con] == CS_CRT && style && !strcasecmp(style, "scanlines")) return CS_SCAN;
+	return CON_KIND[con];
+}
+
 /* Apply pt.cfg's lines for this console: the shared part, then its section.
- * Two passes, so a section wins wherever it sits in the file. */
-static void read_cfg(int con, float *p, int *enabled)
+ * Two passes, so a section wins wherever it sits in the file. With kind
+ * CS_NONE, only `style` is read, into style: the shader's kind decides which
+ * names the rest are. */
+static void read_cfg(int con, int kind, float *p, int *enabled, char *style, size_t style_n)
 {
 	char path[1100], line[256];
 	int pass;
@@ -187,21 +206,26 @@ static void read_cfg(int con, float *p, int *enabled)
 			key = trim(s);
 			val = trim(eq + 1);
 			if (!strcasecmp(key, "console")) continue;   /* file_console */
+			if (!strcasecmp(key, "style")) {
+				if (style) snprintf(style, style_n, "%s", val);
+				continue;
+			}
+			if (kind == CS_NONE) continue;
 			if (!strcasecmp(key, "enabled")) {
 				*enabled = atoi(val) != 0;
 				continue;
 			}
-			k = cs_param_index(CON_KIND[con], key);
+			k = cs_param_index(kind, key);
 			if (k < 0) {
 				fprintf(stderr, "diatom: %s: %s has no setting called %s\n", path,
-				        cs_name(CON_KIND[con]), key);
+				        cs_name(kind), key);
 				continue;
 			}
 			p[k] = (float)atof(val);
 		}
 	}
 	fclose(f);
-	printf("diatom: shader settings read from %s\n", path);
+	if (kind != CS_NONE) printf("diatom: shader settings read from %s\n", path);
 }
 
 /* The shader README's "Emulator core settings", as mGBA's options, for the
@@ -258,18 +282,24 @@ static int file_console(void)
 	return con;
 }
 
-/* What the shader is for this game: the console, its settings, and whether it
- * is on. CON_NONE when the game is not one of the three. */
-static int choose(const char *core, const char *rom, int base_w, float *p, int *enabled)
+/* What the shader is for this game: the console, which shader (*kind), its
+ * settings, and whether it is on. CON_NONE when the game is not one the
+ * shaders are for. */
+static int choose(const char *core, const char *rom, int base_w, float *p, int *enabled,
+                  int *kind)
 {
 	int fc = file_console();
 	int con = fc > 0 ? fc : fc < 0 ? CON_NONE : console_of(core, rom, base_w);
+	char style[32] = "";
 
 	*enabled = 0;
+	*kind = CS_NONE;
 	if (con == CON_NONE) return CON_NONE;
 	*enabled = 1;
-	recommended(con, p);
-	read_cfg(con, p, enabled);
+	read_cfg(con, CS_NONE, NULL, NULL, style, sizeof style);
+	*kind = kind_for(con, style);
+	recommended(con, *kind, p);
+	read_cfg(con, *kind, p, enabled, NULL, 0);
 	return con;
 }
 
@@ -277,6 +307,7 @@ static int g_options_set;    /* this game's mGBA options have been set */
 static int g_running;        /* between diatom_shading_start and _end */
 static int g_on;             /* the shader is drawing this game */
 static int g_cur_con;        /* the console this game was placed as */
+static int g_cur_kind;       /* and its shader, CS_* */
 static float g_cur[MAXP];    /* and the settings it is drawn with */
 static char g_core[1024], g_rom[1024];
 static int  g_base_w;
@@ -284,7 +315,7 @@ static int  g_base_w;
 void diatom_shading_prepare(const char *core, const char *rom)
 {
 	const char *dot = rom ? strrchr(rom, '.') : NULL;
-	int enabled, con;
+	int enabled, con, kind;
 	float p[MAXP];
 
 	g_options_set = 0;
@@ -293,7 +324,7 @@ void diatom_shading_prepare(const char *core, const char *rom)
 	 * launcher or its extension, can be placed; otherwise it waits for its
 	 * size (diatom_shading_start). */
 	if (file_console() == CON_NONE && (!dot || !strcasecmp(dot, ".zip"))) return;
-	con = choose(core, rom, 0, p, &enabled);
+	con = choose(core, rom, 0, p, &enabled, &kind);
 	if (con != CON_NONE && enabled) {
 		core_options(con, p);
 		g_options_set = 1;
@@ -302,15 +333,16 @@ void diatom_shading_prepare(const char *core, const char *rom)
 
 void diatom_shading_start(const char *core, const char *rom, int base_w)
 {
-	int enabled, con;
+	int enabled, con, kind;
 	float p[MAXP];
 
 	snprintf(g_core, sizeof g_core, "%s", core ? core : "");
 	snprintf(g_rom, sizeof g_rom, "%s", rom ? rom : "");
 	g_base_w = base_w;
 	g_running = 1;
-	con = choose(core, rom, base_w, p, &enabled);
+	con = choose(core, rom, base_w, p, &enabled, &kind);
 	g_cur_con = con;
+	g_cur_kind = kind;
 	memcpy(g_cur, p, sizeof g_cur);
 	g_on = con != CON_NONE && enabled;
 	if (con == CON_NONE) {
@@ -323,9 +355,9 @@ void diatom_shading_start(const char *core, const char *rom, int base_w)
 		core_options(con, p);
 		g_options_set = 1;
 	}
-	printf("diatom: shader for %s: %s\n", CON_NAME[con], enabled ? cs_name(CON_KIND[con]) : "off");
-	diatom_port_shader(enabled ? (diatom_shader)CON_KIND[con] : DIATOM_SHADER_NONE, p,
-	                   cs_nparams(CON_KIND[con]));
+	printf("diatom: shader for %s: %s\n", CON_NAME[con], enabled ? cs_name(kind) : "off");
+	diatom_port_shader(enabled ? (diatom_shader)kind : DIATOM_SHADER_NONE, p,
+	                   cs_nparams(kind));
 }
 
 void diatom_shading_set_file(const char *path)
@@ -337,10 +369,10 @@ void diatom_shading_set_file(const char *path)
 	 * change of Game system changes mGBA's settings with it. */
 	g_options_set = 0;
 	{
-		int enabled;
+		int enabled, kind;
 		float p[MAXP];
 		int con = choose(g_core[0] ? g_core : NULL, g_rom[0] ? g_rom : NULL, g_base_w,
-		                 p, &enabled);
+		                 p, &enabled, &kind);
 		if (con != CON_NONE && enabled) {
 			int was = (int)(g_cur[PT_GAME_SYSTEM] + 0.5f);
 			int now = (int)(p[PT_GAME_SYSTEM] + 0.5f);
@@ -363,7 +395,7 @@ int diatom_shading_current(float *params)
 {
 	int kind;
 	if (!g_running || !g_on) return 0;
-	kind = CON_KIND[g_cur_con];
+	kind = g_cur_kind;
 	if (params) memcpy(params, g_cur, (size_t)cs_nparams(kind) * sizeof *params);
 	return kind;
 }

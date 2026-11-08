@@ -1,5 +1,5 @@
 #!/bin/sh
-# crt-lottes-fast and lcd3x (ChaOS): the CPU ports (othc) against the GLSL
+# crt-lottes-fast, lcd3x and res-independent-scanlines (ChaOS): the CPU ports (othc) against the GLSL
 # drawn by Mesa (glref), every pixel within one level.
 #
 # The GLSL is libretro glsl-shaders' (GLSL=path to that checkout), drawn at
@@ -13,6 +13,13 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 hp() { sed 's/precision mediump float/precision highp float/; s/#define COMPAT_PRECISION mediump/#define COMPAT_PRECISION highp/' "$1" > "$2"; }
 hp "$G/crt/shaders/crt-lottes-fast.glsl" "$T/crt.glsl"
 hp "$G/handheld/shaders/lcd3x.glsl" "$T/lcd.glsl"
+# glref draws the picture's top row at the bottom of its framebuffer (it reads
+# back without a flip), so gl_FragCoord.y counts from the picture's top there;
+# on a screen it counts from the bottom, which is what the scanlines' CPU port
+# follows. The one place the scanlines read it is turned round to match.
+hp "$G/scanlines/shaders/res-independent-scanlines.glsl" "$T/scan0.glsl"
+sed 's/(gl_FragCoord.y \* OutSize.w)/((OutputSize.y - gl_FragCoord.y) * OutSize.w)/' "$T/scan0.glsl" > "$T/scan.glsl"
+grep -q 'OutputSize.y - gl_FragCoord.y' "$T/scan.glsl"
 fail=0
 run() {
 	k=$1 f=$2 s=$3; shift 3
@@ -23,6 +30,11 @@ run() {
 	echo "$r" | grep -q "within 1 level 100.00%" || fail=1
 }
 for f in gb gbc gba; do
+	run scan $f 3
+	run scan $f 4 autoscale=1
+	run scan $f 3 autoscale=1 amp=1 lines_black=0.3
+	run scan $f 5 autoscale=1 phase=1.2 lines_white=1.5 amp=0.8
+	run scan $f 2 imageSize=160
 	run lcd $f 3
 	run lcd $f 5 brighten_scanlines=4 brighten_lcd=1
 	run crt $f 3
@@ -32,4 +44,4 @@ for f in gb gbc gba; do
 	run crt $f 3 MASK=0 SCANLINE_THINNESS=1 CRT_GAMMA=2.2
 	run crt $f 3 MASK=3 CURVATURE=0 MASK_INTENSITY=1
 done
-[ $fail = 0 ] && echo "ok: crt-lottes-fast and lcd3x match the GLSL" || { echo "FAIL"; exit 1; }
+[ $fail = 0 ] && echo "ok: crt-lottes-fast, lcd3x and the scanlines match the GLSL" || { echo "FAIL"; exit 1; }

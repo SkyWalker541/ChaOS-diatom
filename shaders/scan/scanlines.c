@@ -1,0 +1,141 @@
+/* Resolution-Independent Scanlines on the CPU (ChaOS). See scanlines.h.
+ *
+ * Follows res-independent-scanlines.glsl (libretro glsl-shaders), after
+ * RiskyJumps, public domain:
+ *
+ *   scale = autoscale ? InputSize.y : imageSize
+ *   angle = gl_FragCoord.y / OutputSize.y * omega * scale + phase,  omega = pi
+ *   lines = abs(sin(angle) * amp) * (lines_white - lines_black) + lines_black
+ *   color = texel * lines
+ *
+ * gl_FragCoord counts from the bottom of the output, so screen row Y from the
+ * top is at oh - Y - 0.5. The factor per screen row is a table, made when the
+ * size or the settings change, in 8.8 fixed point; each game pixel's three
+ * channels are scaled once per screen row and repeated across its columns.
+ */
+#include "scanlines.h"
+
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+const scan_param scan_params[SCAN_NPARAMS] = {
+	[SCAN_AMP]         = { "amp",         1.25f,   0.0f,   2.0f, 0.05f },
+	[SCAN_PHASE]       = { "phase",       0.5f,    0.0f,   2.0f, 0.05f },
+	[SCAN_LINES_BLACK] = { "lines_black", 0.0f,    0.0f,   1.0f, 0.05f },
+	[SCAN_LINES_WHITE] = { "lines_white", 1.0f,    0.0f,   2.0f, 0.05f },
+	[SCAN_IMAGE_SIZE]  = { "imageSize",   224.0f, 144.0f, 288.0f, 1.0f },
+	[SCAN_AUTOSCALE]   = { "autoscale",   0.0f,    0.0f,   1.0f, 1.0f },
+};
+
+int scan_param_index(const char *name)
+{
+	int i;
+	for (i = 0; i < SCAN_NPARAMS; i++)
+		if (!strcmp(scan_params[i].name, name)) return i;
+	return -1;
+}
+
+struct scan_ctx {
+	float p[SCAN_NPARAMS];
+	const uint32_t *src;
+	size_t pitch;
+	int w, h, s;
+	uint32_t *yf;           /* per screen row, the factor times 65536 */
+	size_t ycap;
+	int ready;
+};
+
+scan_ctx *scan_create(void)
+{
+	scan_ctx *c = calloc(1, sizeof *c);
+	int i;
+	if (!c) return NULL;
+	for (i = 0; i < SCAN_NPARAMS; i++) c->p[i] = scan_params[i].def;
+	return c;
+}
+
+void scan_destroy(scan_ctx *c)
+{
+	if (!c) return;
+	free(c->yf);
+	free(c);
+}
+
+void scan_set_params(scan_ctx *c, const float *v)
+{
+	memcpy(c->p, v, sizeof c->p);
+	c->w = c->h = c->s = 0;      /* the table again at the next frame */
+	c->ready = 0;
+}
+
+static int table(scan_ctx *c, int h, int s)
+{
+	const double pi = 3.141592654;
+	double amp = c->p[SCAN_AMP], phase = c->p[SCAN_PHASE];
+	double lb = c->p[SCAN_LINES_BLACK], lw = c->p[SCAN_LINES_WHITE];
+	double scale = c->p[SCAN_AUTOSCALE] == 1.0f ? (double)h : (double)c->p[SCAN_IMAGE_SIZE];
+	int oh = h * s, Y;
+
+	if ((size_t)oh > c->ycap) {
+		free(c->yf);
+		c->yf = malloc((size_t)oh * sizeof *c->yf);
+		c->ycap = c->yf ? (size_t)oh : 0;
+		if (!c->yf) return -1;
+	}
+	for (Y = 0; Y < oh; Y++) {
+		double fy = (oh - Y - 0.5) / oh;
+		double lines = fabs(sin(fy * pi * scale + phase) * amp) * (lw - lb) + lb;
+		if (lines < 0.0) lines = 0.0;
+		if (lines > 4.0) lines = 4.0;     /* past 255 from 1 already */
+		c->yf[Y] = (uint32_t)(lines * 65536.0 + 0.5);
+	}
+	return 0;
+}
+
+int scan_begin_frame(scan_ctx *c, const uint32_t *src, int w, int h,
+                     size_t src_pitch, int s)
+{
+	if (w <= 0 || h <= 0 || s < 1) { c->ready = 0; return -1; }
+	if (w != c->w || h != c->h || s != c->s) {
+		c->ready = 0;
+		if (table(c, h, s)) { c->w = 0; return -1; }
+		c->w = w; c->h = h; c->s = s;
+	}
+	c->src = src; c->pitch = src_pitch;
+	c->ready = 1;
+	return 0;
+}
+
+static inline uint32_t chan(uint32_t v, uint32_t f)
+{
+	uint32_t o = (v * f + 32768u) >> 16;
+	return o > 255u ? 255u : o;
+}
+
+int scan_render_rows(const scan_ctx *c, int y0, int y1,
+                     uint32_t *rows, size_t pitch, const pt_format *fm)
+{
+	int Y, x, k, s, oh;
+	if (!c || !c->ready) return -1;
+	s = c->s; oh = c->h * s;
+	if (y0 < 0) { rows += (size_t)(-y0) * pitch; y0 = 0; }
+	if (y1 > oh) y1 = oh;
+	for (Y = y0; Y < y1; Y++) {
+		const uint32_t *in = c->src + (size_t)(Y / s) * c->pitch;
+		const uint32_t f = c->yf[Y];
+		uint32_t *o = rows + (size_t)(Y - y0) * pitch;
+		if (f == 0) {
+			for (x = 0; x < c->w * s; x++) o[x] = fm->opaque;
+			continue;
+		}
+		for (x = 0; x < c->w; x++) {
+			uint32_t p = in[x];
+			uint32_t q = (chan((p >> 16) & 0xff, f) << fm->r_shift) |
+			             (chan((p >> 8) & 0xff, f) << fm->g_shift) |
+			             (chan(p & 0xff, f) << fm->b_shift) | fm->opaque;
+			for (k = 0; k < s; k++) *o++ = q;
+		}
+	}
+	return 0;
+}

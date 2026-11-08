@@ -338,6 +338,11 @@ void diatom_port_shader(diatom_shader kind, const float *params, int nparams)
 	shade_set(kind, params, nparams);
 }
 
+void diatom_port_shade_cost(double *ms, unsigned *frames, int *threads)
+{
+	shade_cost(ms, frames, threads);
+}
+
 static void shade_dump(void)
 {
 	static long n;

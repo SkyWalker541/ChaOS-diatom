@@ -134,10 +134,17 @@ typedef enum {
 	DIATOM_SHADER_NONE,
 	DIATOM_SHADER_PT,
 	DIATOM_SHADER_CRT,
-	DIATOM_SHADER_LCD
+	DIATOM_SHADER_LCD,
+	DIATOM_SHADER_SCAN
 } diatom_shader;
 
 void diatom_port_shader(diatom_shader kind, const float *params, int nparams);
+
+/* What the shader costs (ChaOS's speed check): the average time it took to
+ * draw a frame, in ms, over the frames drawn since it was last set, how many
+ * frames that is, and how many threads draw it. A port that draws no shaders
+ * says 0 frames. */
+void diatom_port_shade_cost(double *ms, unsigned *frames, int *threads);
 
 /* A bezel: an image drawn over every frame, picture and margins alike (ChaOS).
  * Straight-alpha BGRA, w x h, which must be the panel's size; NULL removes it.
