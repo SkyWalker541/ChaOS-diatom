@@ -168,6 +168,8 @@ typedef enum {
 	 * figures (shade_ms, busy_ms, frame_ms, measured: main.c's speed_fields).
 	 * SETBEZEL: an overlay image
 	 * drawn over every frame, from the DTOV file at `path`; empty removes it. */
+	/* (ChaOS: MENU+X in a game writes the frame to a BMP and says SHOT
+	 * path=; the launcher files it. Diatom-to-launcher, so no message here.) */
 	DIATOM_MSG_SETSHADER,
 	DIATOM_MSG_SETBEZEL,
 	DIATOM_MSG_CHEEVOS,    /* report the achievement set and what has fired */

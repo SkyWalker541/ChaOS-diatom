@@ -1930,7 +1930,8 @@ static int run_session_inner(const diatom_session *sn)
 		 * R1 is, so the frame R1 goes down cannot leak into the game - and
 		 * stays hidden after MENU is let go, until R1 is too. */
 		if (buttons & DIATOM_BIT(DIATOM_BTN_MENU))
-			chord_hold = DIATOM_BIT(DIATOM_BTN_R1) | DIATOM_BIT(DIATOM_BTN_L1);
+			chord_hold = DIATOM_BIT(DIATOM_BTN_R1) | DIATOM_BIT(DIATOM_BTN_L1) |
+			             DIATOM_BIT(DIATOM_BTN_X);
 		else                                       chord_hold &= buttons;
 
 		/* The single writer. Every reason to hide a button from the core is
@@ -1958,6 +1959,19 @@ static int run_session_inner(const diatom_session *sn)
 			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
 			    (buttons & DIATOM_BIT(DIATOM_BTN_L1)) && rewind_on())
 				menu_chorded = true;
+			/* ChaOS: MENU+X, a screenshot: the frame as the core drew it,
+			 * to a file the launcher files under the game and tells the
+			 * player about. A chord too. */
+			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
+			    (pressed & DIATOM_BIT(DIATOM_BTN_X))) {
+				static unsigned shot_n;
+				char sp[64];
+
+				menu_chorded = true;
+				snprintf(sp, sizeof sp, "/tmp/diatom-shot-%u.bmp", shot_n++);
+				if (diatom_proto_connected() && write_preview(sp))
+					diatom_proto_send("SHOT\tpath=%s", sp);
+			}
 			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
 			    (pressed & DIATOM_BIT(DIATOM_BTN_R1))) {
 				step_report(g_speed, step_frames, step_periods,
