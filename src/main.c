@@ -1750,6 +1750,14 @@ static int run_session_inner(const diatom_session *sn)
 		const uint32_t rw_held = DIATOM_BIT(DIATOM_BTN_MENU) | DIATOM_BIT(DIATOM_BTN_L1);
 		const bool rewinding = rewind_on() &&
 		                       (diatom_port_input_state() & rw_held) == rw_held;
+		/* ChaOS: said to the launcher as it starts, and once a second
+		 * while it is held, so its notice stays up for as long */
+		{
+			static unsigned rw_turns;
+			if (!rewinding) rw_turns = 0;
+			else if (rw_turns++ % 60 == 0 && diatom_proto_connected())
+				diatom_proto_send("REWINDING");
+		}
 		if (rewinding) {
 			g_audio_fast = true;
 			diatom_env_frame_shown(true);
