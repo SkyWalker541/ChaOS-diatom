@@ -69,7 +69,7 @@ struct crts_ctx {
 	/* the frame, linear, with its edges repeated PADX and PADY deep */
 	float *img;
 	size_t img_cap;
-	int w, h, s, ow, oh, stride;    /* stride: texels a padded row */
+	int w, h, ow, oh, stride;    /* stride: texels a padded row */
 	/* per screen column and per screen row */
 	float *cx, *cfy, *col_v, *col_w;
 	int   *col_x0;
@@ -175,7 +175,7 @@ void crts_set_params(crts_ctx *c, const float *v)
 		scan_w(c->thin, (float)i / SCAN_N, &c->scan[i][0], &c->scan[i][1]);
 	for (i = 0; i <= HW_N + 1; i++)
 		gauss_w(c->blur, 1.0f + (float)i / HW_N, c->hw[i]);
-	c->w = c->h = c->s = 0;       /* the column and row tables again */
+	c->w = c->h = 0;       /* the column and row tables again */
 	c->ready = 0;
 }
 
@@ -223,11 +223,18 @@ static int clampi(int x, int a, int b) { return x < a ? a : x > b ? b : x; }
 int crts_begin_frame(crts_ctx *c, const uint32_t *src, int w, int h,
                      size_t src_pitch, int s)
 {
+	if (s < 1) { c->ready = 0; return -1; }
+	return crts_begin_frame_size(c, src, w, h, src_pitch, w * s, h * s);
+}
+
+int crts_begin_frame_size(crts_ctx *c, const uint32_t *src, int w, int h,
+                          size_t src_pitch, int ow, int oh)
+{
 	int x, y, X, Y, stride = w + 2 * PADX;
 	size_t n = (size_t)stride * (h + 2 * PADY) * 3;
 
 	c->ready = 0;
-	if (w <= 0 || h <= 0 || s < 1) return -1;
+	if (w <= 0 || h <= 0 || ow < 1 || oh < 1) return -1;
 	if (n > c->img_cap) {
 		free(c->img);
 		c->img = malloc(n * sizeof(float));
@@ -245,8 +252,7 @@ int crts_begin_frame(crts_ctx *c, const uint32_t *src, int w, int h,
 			t[2] = c->lin[p & 0xff];
 		}
 	}
-	if (w != c->w || h != c->h || s != c->s) {
-		int ow = w * s, oh = h * s;
+	if (w != c->w || h != c->h || ow != c->ow || oh != c->oh) {
 		if (cols(c, (size_t)ow) || rows(c, (size_t)oh)) return -1;
 		for (X = 0; X < ow; X++) {
 			float px = ((float)X + 0.5f) * ((float)w / (float)ow);
@@ -266,7 +272,7 @@ int crts_begin_frame(crts_ctx *c, const uint32_t *src, int w, int h,
 			c->ry[Y] = py;
 			c->row_v[Y] = 1.0f - clampf(py * py, 0.0f, 1.0f);
 		}
-		c->w = w; c->h = h; c->s = s;
+		c->w = w; c->h = h;
 		c->ow = ow; c->oh = oh; c->stride = stride;
 	}
 	/* what the curvature makes of each column and row, by the parameters */

@@ -116,6 +116,11 @@ pt_band *pt_band_create(void);
 void     pt_band_destroy(pt_band *b);
 int      pt_begin_frame(pt_ctx *c, const uint32_t *src, int w, int h, size_t src_pitch,
                         int scale, unsigned frame);
+/* The same, drawn to any ow x oh: each screen pixel shows the game pixel
+ * under its centre. Away from a whole-number scale the Pixel Effect (Grid or
+ * LCD Dot), which follows the game's pixels, is left off. */
+int      pt_begin_frame_size(pt_ctx *c, const uint32_t *src, int w, int h, size_t src_pitch,
+                             int ow, int oh, unsigned frame);
 int      pt_render_band(const pt_ctx *c, pt_band *b, int y0, int y1,
                         uint32_t *dst, size_t dst_pitch, const pt_format *fmt);
 

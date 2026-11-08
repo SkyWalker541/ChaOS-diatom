@@ -1624,12 +1624,11 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 			for (i = 0; i < n; i++) g_ov_under[i] = opaque;
 	}
 
-	/* Shaded (ChaOS): at a whole-number scale with the picture wholly on the
-	 * panel, the shader draws the rect itself, in place of the rows below.
+	/* Shaded (ChaOS): at any size with the picture wholly on the panel, the
+	 * shader draws the rect itself, in place of the rows below.
 	 * Anything else, or a shader that declines, falls through to them. */
 	if (dst.x >= 0 && dst.y >= 0 && dst.x + dst.w <= (int)g_vinfo.xres &&
-	    dst.y + dst.h <= (int)g_vinfo.yres && dst.w % w == 0 && dst.h % h == 0 &&
-	    dst.w / w == dst.h / h && shade_active() &&
+	    dst.y + dst.h <= (int)g_vinfo.yres && dst.w > 0 && dst.h > 0 && shade_active() &&
 	    bezel_over(dst, x0, x1, y0, y1)) {
 		/* With the bezel over the picture: shaded into ordinary memory, the
 		 * bezel laid over it there, and the rows copied to the page and to
@@ -1645,15 +1644,14 @@ static void blit(uint8_t *page, const void *src, int w, int h, size_t pitch,
 
 			/* Each of the shader's threads finishes its own band. */
 			shade_band_hook(bezel_band, &job);
-			if (shade_frame(src, w, h, pitch, fmt, dst.w / w, g_bz_frame, (size_t)dst.w,
+			if (shade_frame(src, w, h, pitch, fmt, dst.w, dst.h, g_bz_frame, (size_t)dst.w,
 			                ro, go, bo, opaque))
 				return;
 		}
 	}
 	if (dst.x >= 0 && dst.y >= 0 && dst.x + dst.w <= (int)g_vinfo.xres &&
-	    dst.y + dst.h <= (int)g_vinfo.yres && dst.w % w == 0 && dst.h % h == 0 &&
-	    dst.w / w == dst.h / h && !(g_bz && g_bz_any) &&
-	    shade_frame(src, w, h, pitch, fmt, dst.w / w,
+	    dst.y + dst.h <= (int)g_vinfo.yres && dst.w > 0 && dst.h > 0 && !(g_bz && g_bz_any) &&
+	    shade_frame(src, w, h, pitch, fmt, dst.w, dst.h,
 	                (uint32_t *)(page + (size_t)dst.y * g_finfo.line_length) + dst.x,
 	                g_finfo.line_length / sizeof(uint32_t), ro, go, bo, opaque)) {
 		/* What a notice will need to put back, read from the page: the

@@ -20,10 +20,10 @@ static void *band_main(void *a)
 	return NULL;
 }
 static int render_threads(pt_ctx *c, int nt, pt_band **bands, const uint32_t *src, int w, int h,
-                          int s, uint32_t *dst, size_t pitch, const pt_format *f, unsigned frame)
+                          int ow, int oh, uint32_t *dst, size_t pitch, const pt_format *f, unsigned frame)
 {
-	pthread_t th[16]; job jobs[16]; int i, oh = h * s;
-	if (pt_begin_frame(c, src, w, h, (size_t)w, s, frame)) return -1;
+	pthread_t th[16]; job jobs[16]; int i;
+	if (pt_begin_frame_size(c, src, w, h, (size_t)w, ow, oh, frame)) return -1;
 	for (i = 0; i < nt; i++) {
 		jobs[i] = (job){ c, bands[i], oh * i / nt, oh * (i + 1) / nt, dst, pitch, f };
 		pthread_create(&th[i], NULL, band_main, &jobs[i]);
@@ -64,21 +64,23 @@ int main(int argc, char **argv)
 	for (i = 0; i < in.w * in.h; i++)
 		src[i] = ((uint32_t)in.px[i*3] << 16) | ((uint32_t)in.px[i*3+1] << 8) | in.px[i*3+2];
 	out.w = in.w * scale; out.h = in.h * scale;
+	if (strchr(argv[2], 'x')) sscanf(argv[2], "%dx%d", &out.w, &out.h);   /* or any size, WxH */
 	dst = malloc(sizeof *dst * (size_t)out.w * out.h);
 
 	c = pt_create();
 	pt_set_params(c, &p);
-	for (i = 0; i < nt && i < 16; i++) bands[i] = pt_band_create();
-	if (nt ? render_threads(c, nt, bands, src, in.w, in.h, scale, dst, (size_t)out.w, &fmt, (unsigned)frame)
-	       : pt_render(c, src, in.w, in.h, (size_t)in.w, scale, dst, (size_t)out.w, &fmt, (unsigned)frame)) {
+	if (nt < 1) nt = 1;
+	if (nt > 16) nt = 16;
+	for (i = 0; i < nt; i++) bands[i] = pt_band_create();
+	(void)scale;
+	if (render_threads(c, nt, bands, src, in.w, in.h, out.w, out.h, dst, (size_t)out.w, &fmt, (unsigned)frame)) {
 		fprintf(stderr, "render failed\n"); return 1;
 	}
 	if (bench) {
 		struct timespec a, b;
 		clock_gettime(CLOCK_MONOTONIC, &a);
 		for (i = 0; i < bench; i++) {
-			if (nt) render_threads(c, nt, bands, src, in.w, in.h, scale, dst, (size_t)out.w, &fmt, (unsigned)(frame + i));
-			else pt_render(c, src, in.w, in.h, (size_t)in.w, scale, dst, (size_t)out.w, &fmt, (unsigned)(frame + i));
+			render_threads(c, nt, bands, src, in.w, in.h, out.w, out.h, dst, (size_t)out.w, &fmt, (unsigned)(frame + i));
 		}
 		clock_gettime(CLOCK_MONOTONIC, &b);
 		fprintf(stderr, "%.3f ms/frame\n",

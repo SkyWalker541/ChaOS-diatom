@@ -1,7 +1,7 @@
 /* The CPU ports of crt-lottes-fast, lcd3x and the scanlines, for comparing
  * with glref.
  *
- *   othc crt|lcd|scan in.ppm scale out.ppm [NAME=value ...]
+ *   othc crt|lcd|scan in.ppm scale|WxH out.ppm [NAME=value ...]
  *
  * Draws in three bands, as the device does, to test the bands' seams too.
  */
@@ -24,9 +24,10 @@ int main(int argc, char **argv)
 	uint32_t *src, *dst;
 	pt_format fmt = { 16, 8, 0, 0 };
 
-	if (argc < 5) { fprintf(stderr, "usage: othc crt|lcd|scan in.ppm scale out.ppm [NAME=value ...]\n"); return 2; }
+	if (argc < 5) { fprintf(stderr, "usage: othc crt|lcd|scan in.ppm scale|WxH out.ppm [NAME=value ...]\n"); return 2; }
 	if (!ppm_read(argv[2], &in)) return 1;
 	s = atoi(argv[3]); w = in.w; h = in.h; ow = w * s; oh = h * s;
+	if (strchr(argv[3], 'x')) sscanf(argv[3], "%dx%d", &ow, &oh);   /* or any size, WxH */
 	src = malloc((size_t)w * h * 4);
 	dst = malloc((size_t)ow * oh * 4);
 	for (i = 0; i < w * h; i++)
@@ -51,12 +52,12 @@ int main(int argc, char **argv)
 			crts_band *bd = crts_band_create();
 			double t0 = now();
 			for (r = 0; r < n; r++) {
-				crts_begin_frame(c, src, w, h, w, s);
+				crts_begin_frame_size(c, src, w, h, w, ow, oh);
 				crts_render_rows(c, bd, 0, oh, dst, ow, &fmt);
 			}
 			fprintf(stderr, "%.3f ms/frame, %.1f ns/pixel\n", (now() - t0) / n, (now() - t0) * 1e6 / n / ((double)ow * oh));
 		}
-		if (crts_begin_frame(c, src, w, h, w, s)) return 1;
+		if (crts_begin_frame_size(c, src, w, h, w, ow, oh)) return 1;
 		for (b = 0; b < 3; b++) {
 			crts_band *bd = crts_band_create();
 			int y0 = oh * b / 3, y1 = oh * (b + 1) / 3;
@@ -82,12 +83,12 @@ int main(int argc, char **argv)
 			int n = atoi(getenv("BENCH")), r;
 			double t0 = now();
 			for (r = 0; r < n; r++) {
-				scan_begin_frame(c, src, w, h, w, s);
+				scan_begin_frame_size(c, src, w, h, w, ow, oh);
 				scan_render_rows(c, 0, oh, dst, ow, &fmt);
 			}
 			fprintf(stderr, "%.3f ms/frame, %.1f ns/pixel\n", (now() - t0) / n, (now() - t0) * 1e6 / n / ((double)ow * oh));
 		}
-		if (scan_begin_frame(c, src, w, h, w, s)) return 1;
+		if (scan_begin_frame_size(c, src, w, h, w, ow, oh)) return 1;
 		for (b = 0; b < 3; b++) {
 			int y0 = oh * b / 3, y1 = oh * (b + 1) / 3;
 			scan_render_rows(c, y0, y1, dst + (size_t)y0 * ow, ow, &fmt);
@@ -111,12 +112,12 @@ int main(int argc, char **argv)
 			int n = atoi(getenv("BENCH")), r;
 			double t0 = now();
 			for (r = 0; r < n; r++) {
-				lcd3x_begin_frame(c, src, w, h, w, s);
+				lcd3x_begin_frame_size(c, src, w, h, w, ow, oh);
 				lcd3x_render_rows(c, 0, oh, dst, ow, &fmt);
 			}
 			fprintf(stderr, "%.3f ms/frame, %.1f ns/pixel\n", (now() - t0) / n, (now() - t0) * 1e6 / n / ((double)ow * oh));
 		}
-		if (lcd3x_begin_frame(c, src, w, h, w, s)) return 1;
+		if (lcd3x_begin_frame_size(c, src, w, h, w, ow, oh)) return 1;
 		for (b = 0; b < 3; b++) {
 			int y0 = oh * b / 3, y1 = oh * (b + 1) / 3;
 			lcd3x_render_rows(c, y0, y1, dst + (size_t)y0 * ow, ow, &fmt);

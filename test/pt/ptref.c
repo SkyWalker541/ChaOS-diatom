@@ -27,7 +27,8 @@ int main(int argc, char **argv)
 	for (i = 0; i < in.w * in.h; i++)
 		src[i] = ((uint32_t)in.px[i*3] << 16) | ((uint32_t)in.px[i*3+1] << 8) | in.px[i*3+2];
 	out.w = in.w * scale; out.h = in.h * scale;
+	if (strchr(argv[2], 'x')) sscanf(argv[2], "%dx%d", &out.w, &out.h);   /* or any size, WxH */
 	out.px = malloc((size_t)out.w * out.h * 3);
-	pt_reference_render(&p, src, in.w, in.h, (size_t)in.w, scale, out.px, (unsigned)frame);
+	pt_reference_render_size(&p, src, in.w, in.h, (size_t)in.w, out.w, out.h, out.px, (unsigned)frame);
 	return ppm_write(argv[4], &out) ? 0 : 1;
 }

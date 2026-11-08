@@ -30,6 +30,10 @@ void       lcd3x_set_params(lcd3x_ctx *c, const float *v);   /* LCD3X_NPARAMS */
  * the frame is drawn. 0 on success. */
 int        lcd3x_begin_frame(lcd3x_ctx *c, const uint32_t *src, int w, int h,
                              size_t src_pitch, int scale);
+/* The same, drawn to any ow x oh: each screen pixel shows the game pixel
+ * under its centre, the stripes running to the screen's own size. */
+int        lcd3x_begin_frame_size(lcd3x_ctx *c, const uint32_t *src, int w, int h,
+                                  size_t src_pitch, int ow, int oh);
 /* Screen rows [y0, y1) into `rows`, which is where row y0 goes. */
 int        lcd3x_render_rows(const lcd3x_ctx *c, int y0, int y1,
                              uint32_t *rows, size_t pitch, const pt_format *fmt);

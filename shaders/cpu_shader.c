@@ -132,6 +132,18 @@ int cs_begin_frame(cs_ctx *c, const uint32_t *src, int w, int h, size_t src_pitc
 	return -1;
 }
 
+int cs_begin_frame_size(cs_ctx *c, const uint32_t *src, int w, int h,
+                        size_t src_pitch, int ow, int oh, unsigned frame)
+{
+	switch (c->kind) {
+	case CS_PT:  return pt_begin_frame_size(c->pt, src, w, h, src_pitch, ow, oh, frame);
+	case CS_CRT: return crts_begin_frame_size(c->crt, src, w, h, src_pitch, ow, oh);
+	case CS_LCD: return lcd3x_begin_frame_size(c->lcd, src, w, h, src_pitch, ow, oh);
+	case CS_SCAN: return scan_begin_frame_size(c->scan, src, w, h, src_pitch, ow, oh);
+	}
+	return -1;
+}
+
 cs_band *cs_band_create(void)
 {
 	return calloc(1, sizeof(cs_band));

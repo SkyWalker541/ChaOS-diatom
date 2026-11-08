@@ -33,6 +33,10 @@ void      scan_set_params(scan_ctx *c, const float *v);   /* SCAN_NPARAMS */
  * the frame is drawn. 0 on success. */
 int       scan_begin_frame(scan_ctx *c, const uint32_t *src, int w, int h,
                            size_t src_pitch, int scale);
+/* The same, drawn to any ow x oh (each screen pixel the game pixel under its
+ * centre; the sine down the screen's own height). */
+int       scan_begin_frame_size(scan_ctx *c, const uint32_t *src, int w, int h,
+                                size_t src_pitch, int ow, int oh);
 /* Screen rows [y0, y1) into `rows`, which is where row y0 goes. */
 int       scan_render_rows(const scan_ctx *c, int y0, int y1,
                            uint32_t *rows, size_t pitch, const pt_format *fmt);
