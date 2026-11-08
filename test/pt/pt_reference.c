@@ -38,8 +38,15 @@ static rgb mix3(rgb a, rgb b, float t)
 void pt_reference_render(const pt_params *pp, const uint32_t *src, int w, int h,
                          size_t pitch, int s, unsigned char *dst_rgb, unsigned frame)
 {
+	pt_reference_render_size(pp, src, w, h, pitch, w * s, h * s, dst_rgb, frame);
+}
+
+void pt_reference_render_size(const pt_params *pp, const uint32_t *src, int w, int h,
+                              size_t pitch, int ow, int oh, unsigned char *dst_rgb,
+                              unsigned frame)
+{
 	const float *P = pp->v;
-	int ow = w * s, oh = h * s, X, Y;
+	int X, Y;
 	float th = pt_threshold(P), light[3], aspect = (float)w / (float)h;
 
 	pt_light(P, frame, light);

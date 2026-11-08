@@ -371,7 +371,7 @@ static bool present_shaded(const void *src, int w, int h, size_t pitch,
 		if (!g_shaded_last) return false;     /* a dupe of a plain frame */
 	} else {
 		if (!shade_active() || w <= 0 || h <= 0 || dst.x < 0 || dst.y < 0 ||
-		    dst.w % w || dst.h % h || dst.w / w != dst.h / h) return g_shaded_last = false;
+		    dst.w <= 0 || dst.h <= 0) return g_shaded_last = false;
 		if (dst.w != g_shade_w || dst.h != g_shade_h || !g_shade_tex) {
 			uint32_t *b = realloc(g_shade_buf, sizeof *b * (size_t)dst.w * dst.h);
 			if (!b) return g_shaded_last = false;
@@ -382,7 +382,7 @@ static bool present_shaded(const void *src, int w, int h, size_t pitch,
 			if (!g_shade_tex) return g_shaded_last = false;
 			g_shade_w = dst.w; g_shade_h = dst.h;
 		}
-		if (!shade_frame(src, w, h, pitch, fmt, dst.w / w, g_shade_buf, (size_t)dst.w,
+		if (!shade_frame(src, w, h, pitch, fmt, dst.w, dst.h, g_shade_buf, (size_t)dst.w,
 		                 16, 8, 0, 0xff000000u)) return g_shaded_last = false;
 		SDL_UpdateTexture(g_shade_tex, NULL, g_shade_buf, dst.w * 4);
 		shade_dump();

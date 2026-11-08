@@ -140,11 +140,13 @@ struct pt_ctx {
 	pt_params p;
 	int dirty;
 
-	int w, h, s, ow, oh;
+	int w, h, s, ow, oh;   /* s: the whole-number scale, or 0 if there is none */
 
 	/* by position */
 	uint16_t *grain;       /* ow*oh: the backing grey before shadow and tint, 8.8 */
-	float    *dotrows;     /* s*ow: distance from the dot centre, per row of a game pixel */
+	float    *dotrows;     /* s*ow: distance from the dot centre, per row of a game pixel
+	                        * (only at a whole-number scale) */
+	int      *xs, *ys;     /* ow, oh: the game column/row under each screen pixel's centre */
 	int      *shx, *shy;   /* ow, oh: the game column/row casting the drop shadow */
 	uint16_t *gridx, *gridy; /* ow, oh: grid weight per axis */
 	uint16_t *bezx, *bezy; /* ow, oh: bezel shadow per axis, Q15 */
@@ -220,11 +222,11 @@ static void free_tables(pt_ctx *c)
 		(void **)&c->grain, (void **)&c->dotrows, (void **)&c->shx, (void **)&c->shy,
 		(void **)&c->gridx, (void **)&c->gridy, (void **)&c->bezx, (void **)&c->bezy,
 		(void **)&c->bezcol, (void **)&c->glr, (void **)&c->glg, (void **)&c->glb,
-		(void **)&c->glk, (void **)&c->rowlight,
+		(void **)&c->glk, (void **)&c->rowlight, (void **)&c->xs, (void **)&c->ys,
 	};
 	size_t i;
 	for (i = 0; i < sizeof p / sizeof p[0]; i++) { free(*p[i]); *p[i] = NULL; }
-	c->w = c->h = c->s = 0;
+	c->w = c->h = c->s = c->ow = c->oh = 0;
 	c->glare_ok = 0;
 }
 
@@ -248,19 +250,20 @@ void pt_set_params(pt_ctx *c, const pt_params *p)
 
 /* ---- tables ---------------------------------------------------------------- */
 
-static int build_geometry(pt_ctx *c, int w, int h, int s)
+static int build_geometry(pt_ctx *c, int w, int h, int ow, int oh)
 {
-	int ow = w * s, oh = h * s, x, y;
+	int s = ow % w == 0 && oh % h == 0 && ow / w == oh / h ? ow / w : 0, x, y;
 	size_t n = (size_t)ow;
 
 	free_tables(c);
 	c->grain   = malloc(sizeof *c->grain * n * oh);
-	c->dotrows = malloc(sizeof *c->dotrows * n * s);
+	c->dotrows = malloc(sizeof *c->dotrows * n * (s ? s : 1));
+	c->xs = malloc(sizeof *c->xs * n);        c->ys = malloc(sizeof *c->ys * oh);
 	c->shx = malloc(sizeof *c->shx * n);      c->shy = malloc(sizeof *c->shy * oh);
 	c->gridx = malloc(sizeof *c->gridx * n);  c->gridy = malloc(sizeof *c->gridy * oh);
 	c->bezx = malloc(sizeof *c->bezx * n);    c->bezy = malloc(sizeof *c->bezy * oh);
 	c->bezcol = malloc(sizeof *c->bezcol * n);
-	if (!c->grain || !c->dotrows || !c->shx || !c->shy || !c->gridx || !c->gridy ||
+	if (!c->grain || !c->dotrows || !c->xs || !c->ys || !c->shx || !c->shy || !c->gridx || !c->gridy ||
 	    !c->bezx || !c->bezy || !c->bezcol) { free_tables(c); return -1; }
 	c->w = w; c->h = h; c->s = s; c->ow = ow; c->oh = oh;
 
@@ -270,7 +273,18 @@ static int build_geometry(pt_ctx *c, int w, int h, int s)
 		for (x = 0; x < ow; x++)
 			row[x] = (uint16_t)c88(pt_grain(pt_tex0(x, ow), v));
 	}
-	/* The dot's distance repeats every game pixel at a whole-number scale. */
+	/* nearest: the game pixel under the screen pixel's centre, worked out
+	 * as the shader's texture lookup is (and its drop shadow, pt_shadow_src) */
+	for (x = 0; x < ow; x++) {
+		int sx = (int)floorf(pt_tex0(x, ow) * (float)w);
+		c->xs[x] = sx < 0 ? 0 : sx < w ? sx : w - 1;
+	}
+	for (y = 0; y < oh; y++) {
+		int sy = (int)floorf(pt_tex0(y, oh) * (float)h);
+		c->ys[y] = sy < 0 ? 0 : sy < h ? sy : h - 1;
+	}
+	/* The dot's distance repeats every game pixel at a whole-number scale
+	 * (and the Grid and LCD Dot are drawn only at one). */
 	for (y = 0; y < s; y++)
 		for (x = 0; x < ow; x++)
 			c->dotrows[(size_t)y * ow + x] = pt_dot_dist(x % s, y, ow, oh, w, h);
@@ -427,12 +441,12 @@ enum { GAP_BACKING, GAP_BLACK, GAP_WHITE };
 static void spread_source(const pt_ctx *c, pt_band *e, int sy)
 {
 	const pt_src *row = c->src + (size_t)sy * c->w;
-	int s = c->s, sx, k, X = 0;
-	for (sx = 0; sx < c->w; sx++)
-		for (k = 0; k < s; k++, X++) {
-			e->er[X] = row[sx].r; e->eg[X] = row[sx].g; e->eb[X] = row[sx].b;
-			e->ea[X] = row[sx].a; e->efade[X] = row[sx].fade;
-		}
+	int X;
+	for (X = 0; X < c->ow; X++) {
+		const pt_src *p = &row[c->xs[X]];
+		e->er[X] = p->r; e->eg[X] = p->g; e->eb[X] = p->b;
+		e->ea[X] = p->a; e->efade[X] = p->fade;
+	}
 }
 
 /* The drop shadow falling on one screen row: the multiplier cast by the game
@@ -474,13 +488,13 @@ void render_rows(const pt_ctx *c, pt_band *e, int y0, int y1,
 	}
 
 	for (Y = y0; Y < y1; Y++) {
-		const int sy = Y / s;
+		const int sy = c->ys[Y];
 		const uint16_t *restrict grain = c->grain + (size_t)Y * ow;
 		const uint16_t *restrict er = e->er, *restrict eg = e->eg, *restrict eb = e->eb;
 		const uint16_t *restrict ea = e->ea, *restrict esm = e->esm;
 		const uint16_t *restrict em = e->em, *restrict ebz = e->ebz;
 		const float *restrict efade = e->efade;
-		const float *restrict edist = c->dotrows + (size_t)(Y % s) * ow;
+		const float *restrict edist = FX == FX_DOT ? c->dotrows + (size_t)(Y % s) * ow : NULL;
 		const int16_t *restrict glr = GLARE ? c->glr + (size_t)Y * ow : NULL;
 		const int16_t *restrict glg = GLARE ? c->glg + (size_t)Y * ow : NULL;
 		const int16_t *restrict glb = GLARE ? c->glb + (size_t)Y * ow : NULL;
@@ -596,11 +610,19 @@ static const rows_fn rows_table[3 * 3 * 2 * 2] = { ENT_GAP(0), ENT_GAP(1), ENT_G
 int pt_begin_frame(pt_ctx *c, const uint32_t *src, int w, int h, size_t src_pitch,
                    int s, unsigned frame)
 {
+	if (s <= 0) { c->ready = 0; return -1; }
+	return pt_begin_frame_size(c, src, w, h, src_pitch, w * s, h * s, frame);
+}
+
+int pt_begin_frame_size(pt_ctx *c, const uint32_t *src, int w, int h, size_t src_pitch,
+                        int ow, int oh, unsigned frame)
+{
 	const float *P = c->p.v;
 
 	c->ready = 0;
-	if (w <= 0 || h <= 0 || s <= 0) return -1;
-	if ((c->w != w || c->h != h || c->s != s) && build_geometry(c, w, h, s)) return -1;
+	if (w <= 0 || h <= 0 || ow <= 0 || oh <= 0) return -1;
+	if ((c->w != w || c->h != h || c->ow != ow || c->oh != oh) &&
+	    build_geometry(c, w, h, ow, oh)) return -1;
 	if (c->dirty) build_settings(c);
 
 	if ((size_t)w * h > c->src_cap) {
@@ -650,6 +672,9 @@ static int band_rows(const pt_ctx *c, pt_band *b, int y0, int y1,
 	if (whole) dst += (size_t)y0 * dst_pitch;
 
 	fx    = P[PT_PIXEL_EFFECT] < 0.5f ? FX_OFF : (P[PT_PIXEL_EFFECT] < 1.5f ? FX_GRID : FX_DOT);
+	/* the Grid and LCD Dot follow the game's pixels, which away from a
+	 * whole-number scale are not all the same size: off there */
+	if (!c->s) fx = FX_OFF;
 	gap   = P[PT_GAP_COLOR] < 0.5f ? GAP_BACKING : (P[PT_GAP_COLOR] < 1.5f ? GAP_BLACK : GAP_WHITE);
 	glare = P[PT_GLARE_AND_SHEEN] > 0.5f;
 	bezel = P[PT_BEZEL_EDGE_SHADOW] >= 0.001f;

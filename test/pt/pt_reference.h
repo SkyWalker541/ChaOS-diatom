@@ -9,5 +9,9 @@
 /* One frame, the slow and literal way: RGB bytes, (w*s) x (h*s). */
 void pt_reference_render(const pt_params *p, const uint32_t *src, int w, int h,
                          size_t pitch, int s, unsigned char *dst_rgb, unsigned frame);
+/* The same at any size, ow x oh. */
+void pt_reference_render_size(const pt_params *p, const uint32_t *src, int w, int h,
+                              size_t pitch, int ow, int oh, unsigned char *dst_rgb,
+                              unsigned frame);
 
 #endif

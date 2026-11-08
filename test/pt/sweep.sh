@@ -37,6 +37,13 @@ run() {   # frame scale frameno label params...
 	printf '%-34s %-4s ' "$label" "$f"
 	if [ $TIE = 1 ] && [ "$mode" = gl ]; then
 		python3 compare.py a.ppm b.ppm; echo "    (half-pixel tie: reported, not failed)"
+	elif [ "$mode" = gl ] && case "$s" in *x*) true ;; *) false ;; esac; then
+		# Any size: a screen pixel's centre can fall exactly on the line
+		# between two game pixels (426.5 * 160 / 853 is 80), and which one
+		# the GPU's nearest takes there is its rounding. Those lines only.
+		r=$(python3 compare.py a.ppm b.ppm); echo "$r"
+		echo "$r" | sed -n 's/.*within 1 level *\([0-9.]*\)%.*/\1/p' |
+			awk '{ exit !($1 >= 99.85) }' || fail=1
 	else
 		python3 compare.py a.ppm b.ppm 1 || fail=1
 	fi
@@ -87,5 +94,13 @@ run gbc 4 0 "scale 4, lcd dot"         PT_PIXEL_EFFECT=2
 run gba 2 0 "scale 2"
 run gb  6 0 "scale 6, grid"
 run gbc 1 0 "scale 1"
+
+# Any size (ChaOS's Aspect and Stretch). The Pixel Effect is off away from a
+# whole-number scale (pt_shader.h), so these cases have it off.
+for sz in 1024x768 853x768 1024x683 1001x701; do
+	run gb  $sz 0 "$sz, effect off"         PT_PIXEL_EFFECT=0
+	run gbc $sz 0 "$sz, white mode"         PT_PIXEL_EFFECT=0 PT_TRANSPARENT_PIXELS=0
+	run gba $sz 777 "$sz, glare, shadow, bezel" PT_PIXEL_EFFECT=0 PT_GLARE_AND_SHEEN=1 PT_SHADOW_DISTANCE=2 PT_BEZEL_EDGE_SHADOW=0.8
+done
 
 [ $fail = 0 ] && echo "ALL CASES WITHIN 1 LEVEL" || { echo "SOME CASES DIFFER"; exit 1; }

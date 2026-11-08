@@ -8,7 +8,8 @@
  *
  * and a CRT console may have the lighter of two instead: `style = scanlines`
  * in its settings gives it res-independent-scanlines (shaders/scan), which
- * costs the CPU a tenth of what crt-lottes-fast does.
+ * costs the CPU a tenth of what crt-lottes-fast does. A PT console may have
+ * `style = lcd3x`, lcd3x's grid, which looks the same at any size.
  *
  * The launcher decides. Before each RUN it sends SETSHADER with a small file
  * of the settings for that game's console, written from its Shaders menu:
@@ -114,7 +115,7 @@ static void recommended(int con, int kind, float *p)
 	int i;
 
 	for (i = 0; i < cs_nparams(kind); i++) p[i] = cs_param_def(kind, i);
-	switch (con) {
+	if (kind == CS_PT) switch (con) {
 	case CON_GB:  p[PT_GAME_SYSTEM] = 1; p[PT_BACKING_COLOR] = 1; break;
 	case CON_GBC: p[PT_GAME_SYSTEM] = 2; p[PT_BACKING_COLOR] = 1; break;
 	case CON_GBA: p[PT_GAME_SYSTEM] = 4; p[PT_BACKING_COLOR] = 2; break;
@@ -163,10 +164,14 @@ static int cfg_path(char *out, size_t cap)
 }
 
 /* The shader a console's games get: its own, or for a CRT console with
- * `style = scanlines`, the scanlines. */
+ * `style = scanlines`, the scanlines, and for a Game Boy console with
+ * `style = lcd3x`, lcd3x. */
 static int kind_for(int con, const char *style)
 {
 	if (CON_KIND[con] == CS_CRT && style && !strcasecmp(style, "scanlines")) return CS_SCAN;
+	/* a Game Boy may have lcd3x's grid instead of PT, which looks the same
+	 * at any size */
+	if (CON_KIND[con] == CS_PT && style && !strcasecmp(style, "lcd3x")) return CS_LCD;
 	return CON_KIND[con];
 }
 
@@ -237,12 +242,12 @@ static void read_cfg(int con, int kind, float *p, int *enabled, char *style, siz
  *   3 GBA SP           GBA                Smart
  *   4 GBA Original     GBA                LCD ghosting (accurate)
  */
-static void core_options(int con, const float *p)
+static void core_options(int con, int kind, const float *p)
 {
 	int sys = (int)(p[PT_GAME_SYSTEM] + 0.5f);
 	const char *cc, *blend;
 
-	if (CON_KIND[con] != CS_PT) return;     /* mGBA's alone */
+	if (kind != CS_PT) return;     /* PT's alone (lcd3x leaves mGBA as it is) */
 	if (sys < 1 || sys > 4) sys = con == CON_GB ? 1 : con == CON_GBC ? 2 : 4;
 	switch (sys) {
 	case 1:  cc = "OFF"; blend = "OFF";          break;
@@ -300,6 +305,8 @@ static int choose(const char *core, const char *rom, int base_w, float *p, int *
 	*kind = kind_for(con, style);
 	recommended(con, *kind, p);
 	read_cfg(con, *kind, p, enabled, NULL, 0);
+	/* PT's LCD Dot is gone from ChaOS (too slow on the Brick): Off */
+	if (*kind == CS_PT && p[PT_PIXEL_EFFECT] > 1.5f) p[PT_PIXEL_EFFECT] = 0.0f;
 	return con;
 }
 
@@ -326,7 +333,7 @@ void diatom_shading_prepare(const char *core, const char *rom)
 	if (file_console() == CON_NONE && (!dot || !strcasecmp(dot, ".zip"))) return;
 	con = choose(core, rom, 0, p, &enabled, &kind);
 	if (con != CON_NONE && enabled) {
-		core_options(con, p);
+		core_options(con, kind, p);
 		g_options_set = 1;
 	}
 }
@@ -352,7 +359,7 @@ void diatom_shading_start(const char *core, const char *rom, int base_w)
 	/* Options not yet set (a zip's, now its console is known, or a change):
 	 * mGBA takes them on the next frame. */
 	if (enabled && !g_options_set) {
-		core_options(con, p);
+		core_options(con, kind, p);
 		g_options_set = 1;
 	}
 	printf("diatom: shader for %s: %s\n", CON_NAME[con], enabled ? cs_name(kind) : "off");
@@ -376,7 +383,8 @@ void diatom_shading_set_file(const char *path)
 		if (con != CON_NONE && enabled) {
 			int was = (int)(g_cur[PT_GAME_SYSTEM] + 0.5f);
 			int now = (int)(p[PT_GAME_SYSTEM] + 0.5f);
-			if (!g_on || con != g_cur_con || was != now) core_options(con, p);
+			if (!g_on || con != g_cur_con || kind != g_cur_kind || was != now)
+				core_options(con, kind, p);
 			g_options_set = 1;
 		}
 	}

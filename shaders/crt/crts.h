@@ -41,6 +41,9 @@ void       crts_band_destroy(crts_band *b);
 /* src is 0x00RRGGBB, w x h, src_pitch pixels a row. 0 on success. */
 int        crts_begin_frame(crts_ctx *c, const uint32_t *src, int w, int h,
                             size_t src_pitch, int scale);
+/* The same, drawn to any ow x oh: the GLSL's sizes are the screen's own. */
+int        crts_begin_frame_size(crts_ctx *c, const uint32_t *src, int w, int h,
+                                 size_t src_pitch, int ow, int oh);
 /* Screen rows [y0, y1) into `rows`, which is where row y0 goes. */
 int        crts_render_rows(const crts_ctx *c, crts_band *b, int y0, int y1,
                             uint32_t *rows, size_t pitch, const pt_format *fmt);

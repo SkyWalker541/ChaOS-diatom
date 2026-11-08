@@ -40,9 +40,11 @@ struct scan_ctx {
 	float p[SCAN_NPARAMS];
 	const uint32_t *src;
 	size_t pitch;
-	int w, h, s;
+	int w, h, ow, oh;
+	int s;                  /* the whole-number scale, or 0 if there is none */
 	uint32_t *yf;           /* per screen row, the factor times 65536 */
-	size_t ycap;
+	int *ys, *xs;           /* per screen row and column, the game's */
+	size_t ycap, xcap;
 	int ready;
 };
 
@@ -58,30 +60,46 @@ scan_ctx *scan_create(void)
 void scan_destroy(scan_ctx *c)
 {
 	if (!c) return;
-	free(c->yf);
+	free(c->yf); free(c->ys); free(c->xs);
 	free(c);
 }
 
 void scan_set_params(scan_ctx *c, const float *v)
 {
 	memcpy(c->p, v, sizeof c->p);
-	c->w = c->h = c->s = 0;      /* the table again at the next frame */
+	c->w = c->h = c->ow = c->oh = 0;      /* the table again at the next frame */
 	c->ready = 0;
 }
 
-static int table(scan_ctx *c, int h, int s)
+static int table(scan_ctx *c, int w, int h, int ow, int oh)
 {
 	const double pi = 3.141592654;
 	double amp = c->p[SCAN_AMP], phase = c->p[SCAN_PHASE];
 	double lb = c->p[SCAN_LINES_BLACK], lw = c->p[SCAN_LINES_WHITE];
 	double scale = c->p[SCAN_AUTOSCALE] == 1.0f ? (double)h : (double)c->p[SCAN_IMAGE_SIZE];
-	int oh = h * s, Y;
+	int Y, X;
 
 	if ((size_t)oh > c->ycap) {
-		free(c->yf);
+		free(c->yf); free(c->ys);
 		c->yf = malloc((size_t)oh * sizeof *c->yf);
-		c->ycap = c->yf ? (size_t)oh : 0;
-		if (!c->yf) return -1;
+		c->ys = malloc((size_t)oh * sizeof *c->ys);
+		c->ycap = c->yf && c->ys ? (size_t)oh : 0;
+		if (!c->ycap) return -1;
+	}
+	if ((size_t)ow > c->xcap) {
+		free(c->xs);
+		c->xs = malloc((size_t)ow * sizeof *c->xs);
+		c->xcap = c->xs ? (size_t)ow : 0;
+		if (!c->xcap) return -1;
+	}
+	/* nearest: the game pixel under the screen pixel's centre */
+	for (X = 0; X < ow; X++) {
+		int sx = (int)(((X + 0.5) * w) / ow);
+		c->xs[X] = sx < w ? sx : w - 1;
+	}
+	for (Y = 0; Y < oh; Y++) {
+		int sy = (int)(((Y + 0.5) * h) / oh);
+		c->ys[Y] = sy < h ? sy : h - 1;
 	}
 	for (Y = 0; Y < oh; Y++) {
 		double fy = (oh - Y - 0.5) / oh;
@@ -93,18 +111,26 @@ static int table(scan_ctx *c, int h, int s)
 	return 0;
 }
 
-int scan_begin_frame(scan_ctx *c, const uint32_t *src, int w, int h,
-                     size_t src_pitch, int s)
+int scan_begin_frame_size(scan_ctx *c, const uint32_t *src, int w, int h,
+                          size_t src_pitch, int ow, int oh)
 {
-	if (w <= 0 || h <= 0 || s < 1) { c->ready = 0; return -1; }
-	if (w != c->w || h != c->h || s != c->s) {
+	if (w <= 0 || h <= 0 || ow < 1 || oh < 1) { c->ready = 0; return -1; }
+	if (w != c->w || h != c->h || ow != c->ow || oh != c->oh) {
 		c->ready = 0;
-		if (table(c, h, s)) { c->w = 0; return -1; }
-		c->w = w; c->h = h; c->s = s;
+		if (table(c, w, h, ow, oh)) { c->w = 0; return -1; }
+		c->w = w; c->h = h; c->ow = ow; c->oh = oh;
+		c->s = ow % w == 0 && oh % h == 0 && ow / w == oh / h ? ow / w : 0;
 	}
 	c->src = src; c->pitch = src_pitch;
 	c->ready = 1;
 	return 0;
+}
+
+int scan_begin_frame(scan_ctx *c, const uint32_t *src, int w, int h,
+                     size_t src_pitch, int s)
+{
+	if (s < 1) { c->ready = 0; return -1; }
+	return scan_begin_frame_size(c, src, w, h, src_pitch, w * s, h * s);
 }
 
 static inline uint32_t chan(uint32_t v, uint32_t f)
@@ -116,17 +142,26 @@ static inline uint32_t chan(uint32_t v, uint32_t f)
 int scan_render_rows(const scan_ctx *c, int y0, int y1,
                      uint32_t *rows, size_t pitch, const pt_format *fm)
 {
-	int Y, x, k, s, oh;
+	int Y, x, k, s, oh, ow;
 	if (!c || !c->ready) return -1;
-	s = c->s; oh = c->h * s;
+	s = c->s; oh = c->oh; ow = c->ow;
 	if (y0 < 0) { rows += (size_t)(-y0) * pitch; y0 = 0; }
 	if (y1 > oh) y1 = oh;
 	for (Y = y0; Y < y1; Y++) {
-		const uint32_t *in = c->src + (size_t)(Y / s) * c->pitch;
+		const uint32_t *in = c->src + (size_t)c->ys[Y] * c->pitch;
 		const uint32_t f = c->yf[Y];
 		uint32_t *o = rows + (size_t)(Y - y0) * pitch;
 		if (f == 0) {
-			for (x = 0; x < c->w * s; x++) o[x] = fm->opaque;
+			for (x = 0; x < ow; x++) o[x] = fm->opaque;
+			continue;
+		}
+		if (!s) {           /* no whole-number scale: each column its own */
+			for (x = 0; x < ow; x++) {
+				uint32_t p = in[c->xs[x]];
+				o[x] = (chan((p >> 16) & 0xff, f) << fm->r_shift) |
+				       (chan((p >> 8) & 0xff, f) << fm->g_shift) |
+				       (chan(p & 0xff, f) << fm->b_shift) | fm->opaque;
+			}
 			continue;
 		}
 		for (x = 0; x < c->w; x++) {

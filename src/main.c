@@ -277,7 +277,7 @@ static bool write_shaded(const char *path, diatom_rect *where)
 	cs_band *band = NULL;
 	pt_format fmt = { 16, 8, 0, 0 };
 	uint32_t *in = NULL, *out = NULL;
-	int w = g_frame_w, h = g_frame_h, scale, ow, oh, x, y, kind;
+	int w = g_frame_w, h = g_frame_h, ow, oh, x, y, kind;
 	size_t row, pad;
 	unsigned char hdr[54];
 	unsigned size;
@@ -286,10 +286,9 @@ static bool write_shaded(const char *path, diatom_rect *where)
 
 	if (!path || !*path || !g_frame || w <= 0 || h <= 0 || !(kind = diatom_shading_current(v)))
 		return false;
-	scale = g_dst.w / w;
-	if (scale < 1 || g_dst.w != w * scale || g_dst.h != h * scale) return false;
-	ow = w * scale;
-	oh = h * scale;
+	ow = g_dst.w;
+	oh = g_dst.h;
+	if (ow < 1 || oh < 1) return false;
 
 	in  = malloc((size_t)w * h * sizeof *in);
 	out = malloc((size_t)ow * oh * sizeof *out);
@@ -314,7 +313,7 @@ static bool write_shaded(const char *path, diatom_rect *where)
 	cs_set_params(c, v);
 	{
 		uint64_t t0 = diatom_port_now_us();
-		if (cs_begin_frame(c, in, w, h, (size_t)w, scale, 0) ||
+		if (cs_begin_frame_size(c, in, w, h, (size_t)w, ow, oh, 0) ||
 		    cs_render_rows(c, band, 0, oh, out, (size_t)ow, &fmt)) goto done;
 		g_preview_ms = (double)(diatom_port_now_us() - t0) / 1000.0;
 	}
@@ -707,21 +706,8 @@ static const char *filter_name(diatom_filter f)
 	return f == DIATOM_FILTER_SHARP ? "sharp" : "nearest";
 }
 
-/* ChaOS draws at whole-number scales only: every mode asked for becomes
- * "integer", so pixels stay square and even, and a shader's grid lines up
- * with them. The launcher's Display Mode setting is left in place for now
- * and has no effect. */
-static int integer_mode(void)
-{
-	int i;
-	for (i = 0; i < diatom_mode_count; i++)
-		if (diatom_modes[i].mode == DIATOM_SCALE_INTEGER) return i;
-	return 0;
-}
-
 static void apply_display(int mode, diatom_filter filter)
 {
-	mode     = integer_mode();
 	g_mode   = mode;
 	g_filter = filter;
 	g_dst = diatom_scale_rect(diatom_modes[mode].mode, g_base_w, g_base_h,
@@ -2472,6 +2458,15 @@ int main(int argc, char **argv)
 			sn.console    = m.console;
 			sn.mode   = start_mode;
 			sn.filter = start_filter;
+			/* ChaOS: the console's Display Mode on the RUN itself
+			 * (`mode=integer`), so its first frame is drawn that way;
+			 * without one, or with a name it does not know, the
+			 * process's own. */
+			if (m.dmode[0]) {
+				int k;
+				for (k = 0; k < diatom_mode_count; k++)
+					if (!strcmp(diatom_modes[k].name, m.dmode)) { sn.mode = k; break; }
+			}
 			run_session(&sn);   /* its own ERROR/EXIT is the report */
 
 			/* The options the launcher sent were for THAT game. Cores are

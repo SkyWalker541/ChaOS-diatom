@@ -44,6 +44,9 @@ void     cs_set_params(cs_ctx *c, const float *v);
 /* src is 0x00RRGGBB, kept until the frame is drawn. 0 on success. */
 int      cs_begin_frame(cs_ctx *c, const uint32_t *src, int w, int h, size_t src_pitch,
                         int scale, unsigned frame);
+/* The same, drawn to any ow x oh, not only a whole-number scale. */
+int      cs_begin_frame_size(cs_ctx *c, const uint32_t *src, int w, int h,
+                             size_t src_pitch, int ow, int oh, unsigned frame);
 cs_band *cs_band_create(void);
 void     cs_band_destroy(cs_band *b);
 /* Screen rows [y0, y1) into `rows`, which is where row y0 goes. */

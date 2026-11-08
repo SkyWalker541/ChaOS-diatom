@@ -181,7 +181,7 @@ static bool convert(const void *src, int w, int h, size_t pitch, diatom_pixfmt f
 	return true;
 }
 
-static void log_timing(uint64_t us, int w, int h, int scale)
+static void log_timing(uint64_t us, int w, int h, int ow, int oh)
 {
 	static uint64_t total, worst;
 	static unsigned count;
@@ -191,8 +191,8 @@ static void log_timing(uint64_t us, int w, int h, int scale)
 	if (us > worst) worst = us;
 	if (++count < SHADE_LOG_EVERY) return;
 	snprintf(m, sizeof m,
-	         "shade: %s %dx%d at %dx, %u frames: %.2f ms average, %.2f ms worst, %d threads",
-	         cs_name(cs_kind(g_ctx)), w, h, scale, count, (double)total / count / 1000.0, (double)worst / 1000.0,
+	         "shade: %s %dx%d to %dx%d, %u frames: %.2f ms average, %.2f ms worst, %d threads",
+	         cs_name(cs_kind(g_ctx)), w, h, ow, oh, count, (double)total / count / 1000.0, (double)worst / 1000.0,
 	         g_nhelp + 1);
 	diatom_port_log(DIATOM_LOG_INFO, m);
 	total = worst = 0;
@@ -200,11 +200,11 @@ static void log_timing(uint64_t us, int w, int h, int scale)
 }
 
 bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
-                 int scale, uint32_t *out, size_t out_pitch,
+                 int ow, int oh, uint32_t *out, size_t out_pitch,
                  unsigned r_shift, unsigned g_shift, unsigned b_shift, uint32_t opaque)
 {
 	uint64_t t0;
-	int oh, nb, i;
+	int nb, i;
 
 	pthread_mutex_lock(&g_set_mx);
 	if (g_set_new) {
@@ -222,7 +222,7 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 	}
 	pthread_mutex_unlock(&g_set_mx);
 
-	if (!g_on || !g_ctx || !src || w <= 0 || h <= 0 || scale < 1 ||
+	if (!g_on || !g_ctx || !src || w <= 0 || h <= 0 || ow < 1 || oh < 1 ||
 	    (!g_own && !(g_own = cs_band_create()))) {
 		g_hook = NULL;
 		return false;
@@ -231,13 +231,12 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 
 	t0 = diatom_port_now_us();
 	if (!convert(src, w, h, pitch, fmt) ||
-	    cs_begin_frame(g_ctx, g_buf, w, h, (size_t)w, scale, g_frame++)) {
+	    cs_begin_frame_size(g_ctx, g_buf, w, h, (size_t)w, ow, oh, g_frame++)) {
 		g_hook = NULL;
 		return false;
 	}
 
 	/* Bands of equal height: the calling thread takes the first. */
-	oh = h * scale;
 	nb = g_nhelp + 1;
 	g_out = out;
 	g_out_pitch = out_pitch;
@@ -264,7 +263,7 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 	g_hook = NULL;
 	{
 		uint64_t us = diatom_port_now_us() - t0;
-		log_timing(us, w, h, scale);
+		log_timing(us, w, h, ow, oh);
 		pthread_mutex_lock(&g_set_mx);
 		if (!g_set_new && g_cost_n < 1000000u) { g_cost_us += us; g_cost_n++; }
 		pthread_mutex_unlock(&g_set_mx);

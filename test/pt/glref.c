@@ -6,7 +6,7 @@
  * TextureSize == InputSize == the game frame, OutputSize = frame * scale,
  * nearest sampling, clamp to edge.
  *
- * usage: glref shader.glsl in.ppm scale frame out.ppm [NAME=value ...]
+ * usage: glref shader.glsl in.ppm scale|WxH frame out.ppm [NAME=value ...]
  */
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -82,6 +82,8 @@ int main(int argc, char **argv)
 	if (!ppm_read(argv[2], &in)) return 1;
 	scale = atoi(argv[3]); frame = atoi(argv[4]);
 	ow = in.w * scale; oh = in.h * scale;
+	/* or an output size, WxH: any size, not only a whole-number scale */
+	if (strchr(argv[3], 'x')) sscanf(argv[3], "%dx%d", &ow, &oh);
 
 	if (getenv("GLREF_ES3")) xattr[1] = 3;
 	dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
