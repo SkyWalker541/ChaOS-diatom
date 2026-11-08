@@ -2,6 +2,7 @@
 #include "cpu_shader.h"
 #include "crts.h"
 #include "lcd3x.h"
+#include "scanlines.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,7 @@ struct cs_ctx {
 	pt_ctx    *pt;
 	crts_ctx  *crt;
 	lcd3x_ctx *lcd;
+	scan_ctx  *scan;
 };
 
 /* Each thread's own state, made for the kind it is first asked to draw */
@@ -25,6 +27,7 @@ const char *cs_name(int kind)
 	case CS_PT:  return "PT SkyWalker541";
 	case CS_CRT: return "crt-lottes-fast";
 	case CS_LCD: return "lcd3x";
+	case CS_SCAN: return "Scanlines";
 	}
 	return NULL;
 }
@@ -35,6 +38,7 @@ int cs_nparams(int kind)
 	case CS_PT:  return PT_NPARAMS;
 	case CS_CRT: return CRTS_NPARAMS;
 	case CS_LCD: return LCD3X_NPARAMS;
+	case CS_SCAN: return SCAN_NPARAMS;
 	}
 	return 0;
 }
@@ -46,6 +50,7 @@ const char *cs_param_name(int kind, int i)
 	case CS_PT:  return pt_param_table[i].name;
 	case CS_CRT: return crts_params[i].name;
 	case CS_LCD: return lcd3x_params[i].name;
+	case CS_SCAN: return scan_params[i].name;
 	}
 	return NULL;
 }
@@ -57,6 +62,7 @@ float cs_param_def(int kind, int i)
 	case CS_PT:  return pt_param_table[i].def;
 	case CS_CRT: return crts_params[i].def;
 	case CS_LCD: return lcd3x_params[i].def;
+	case CS_SCAN: return scan_params[i].def;
 	}
 	return 0.0f;
 }
@@ -67,6 +73,7 @@ int cs_param_index(int kind, const char *name)
 	case CS_PT:  return pt_param_index(name);
 	case CS_CRT: return crts_param_index(name);
 	case CS_LCD: return lcd3x_param_index(name);
+	case CS_SCAN: return scan_param_index(name);
 	}
 	return -1;
 }
@@ -80,6 +87,7 @@ cs_ctx *cs_create(int kind)
 	case CS_PT:  c->pt = pt_create();    if (c->pt) return c;  break;
 	case CS_CRT: c->crt = crts_create(); if (c->crt) return c; break;
 	case CS_LCD: c->lcd = lcd3x_create(); if (c->lcd) return c; break;
+	case CS_SCAN: c->scan = scan_create(); if (c->scan) return c; break;
 	}
 	free(c);
 	return NULL;
@@ -91,6 +99,7 @@ void cs_destroy(cs_ctx *c)
 	pt_destroy(c->pt);
 	crts_destroy(c->crt);
 	lcd3x_destroy(c->lcd);
+	scan_destroy(c->scan);
 	free(c);
 }
 
@@ -107,6 +116,7 @@ void cs_set_params(cs_ctx *c, const float *v)
 	}
 	case CS_CRT: crts_set_params(c->crt, v); break;
 	case CS_LCD: lcd3x_set_params(c->lcd, v); break;
+	case CS_SCAN: scan_set_params(c->scan, v); break;
 	}
 }
 
@@ -117,6 +127,7 @@ int cs_begin_frame(cs_ctx *c, const uint32_t *src, int w, int h, size_t src_pitc
 	case CS_PT:  return pt_begin_frame(c->pt, src, w, h, src_pitch, scale, frame);
 	case CS_CRT: return crts_begin_frame(c->crt, src, w, h, src_pitch, scale);
 	case CS_LCD: return lcd3x_begin_frame(c->lcd, src, w, h, src_pitch, scale);
+	case CS_SCAN: return scan_begin_frame(c->scan, src, w, h, src_pitch, scale);
 	}
 	return -1;
 }
@@ -146,6 +157,8 @@ int cs_render_rows(const cs_ctx *c, cs_band *b, int y0, int y1,
 		return crts_render_rows(c->crt, b->crt, y0, y1, rows, pitch, fmt);
 	case CS_LCD:
 		return lcd3x_render_rows(c->lcd, y0, y1, rows, pitch, fmt);
+	case CS_SCAN:
+		return scan_render_rows(c->scan, y0, y1, rows, pitch, fmt);
 	}
 	return -1;
 }

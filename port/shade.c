@@ -35,9 +35,14 @@ static int       g_set_new;          /* a choice not yet taken up */
 static int       g_set_kind;         /* CS_*, CS_NONE for off */
 static float     g_set_params[64];
 static int       g_on;               /* as taken up by the drawing thread */
+/* The speed check's: frames drawn since the settings were taken up, and
+ * their time. Under g_set_mx. */
+static uint64_t  g_cost_us;
+static unsigned  g_cost_n;
 
 _Static_assert((int)DIATOM_SHADER_PT == CS_PT && (int)DIATOM_SHADER_CRT == CS_CRT &&
-               (int)DIATOM_SHADER_LCD == CS_LCD, "diatom_shader and cpu_shader.h agree");
+               (int)DIATOM_SHADER_LCD == CS_LCD && (int)DIATOM_SHADER_SCAN == CS_SCAN,
+               "diatom_shader and cpu_shader.h agree");
 
 void shade_set(diatom_shader kind, const float *params, int nparams)
 {
@@ -212,6 +217,8 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 			if (g_ctx) cs_set_params(g_ctx, g_set_params);
 		}
 		g_set_new = 0;
+		g_cost_us = 0;
+		g_cost_n = 0;
 	}
 	pthread_mutex_unlock(&g_set_mx);
 
@@ -255,8 +262,23 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 		pthread_mutex_unlock(&g_mx);
 	}
 	g_hook = NULL;
-	log_timing(diatom_port_now_us() - t0, w, h, scale);
+	{
+		uint64_t us = diatom_port_now_us() - t0;
+		log_timing(us, w, h, scale);
+		pthread_mutex_lock(&g_set_mx);
+		if (!g_set_new && g_cost_n < 1000000u) { g_cost_us += us; g_cost_n++; }
+		pthread_mutex_unlock(&g_set_mx);
+	}
 	return true;
+}
+
+void shade_cost(double *ms, unsigned *frames, int *threads)
+{
+	pthread_mutex_lock(&g_set_mx);
+	*frames = g_set_new ? 0 : g_cost_n;
+	*ms = *frames ? (double)g_cost_us / *frames / 1000.0 : 0.0;
+	pthread_mutex_unlock(&g_set_mx);
+	*threads = (g_nhelp ? g_nhelp : SHADE_HELPERS) + 1;
 }
 
 void shade_shutdown(void)

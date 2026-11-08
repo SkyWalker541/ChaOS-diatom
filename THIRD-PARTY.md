@@ -110,5 +110,17 @@ from GLSL to C to run on the CPU.
   as libretro's glsl-shaders carries it in `handheld/shaders/lcd3x.glsl` (at
   `1aaabbe`); the original is kept beside the port as `shaders/lcd/lcd3x.glsl`.
 
+## `shaders/scan/` (added in the ChaOS fork)
+
+**Resolution-Independent Scanlines**, a lighter choice for the CRT consoles,
+ported from GLSL to C to run on the CPU.
+
+- **Based on "Scanlines Sine Absolute Value", "an ultra light scanline
+  shader" by RiskyJumps**, **public domain** (its header: "license: public
+  domain"), as libretro's glsl-shaders carries it in
+  `scanlines/shaders/res-independent-scanlines.glsl` (at `f277bd8`); the
+  original is kept beside the port as
+  `shaders/scan/res-independent-scanlines.glsl`.
+
 Public-domain code sits beside diatom's MPL-2.0 with nothing owed; the
 notices are kept so where the code came from stays plain.

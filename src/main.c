@@ -31,6 +31,76 @@
 #endif
 #include "cpu_shader.h"
 
+/* --- the speed check (ChaOS) ---------------------------------------------- *
+ *
+ * The launcher's shader page says whether the game keeps its speed with the
+ * shader as set. Two measurements make the answer: the time a frame of play
+ * takes on this thread, from the top of the loop to its sleep (the core, the
+ * shader, the present - all of it), and the shader's own share (the port's,
+ * diatom_port_shade_cost). Both are averaged over the frames since the
+ * shader was last set, so what is said is about the settings in force.
+ *
+ * Changed in the pause menu, the new settings have drawn no frame yet: then
+ * the shader's time is judged from the paused frame drawn for the menu
+ * (write_shaded, on one thread, so divided by the port's threads) and the rest
+ * of the frame is taken to cost what it did before the change. Said as an
+ * estimate. */
+#define SPEED_MIN_FRAMES 30
+static double   g_frame_ms;            /* the core's frame period */
+static double   g_busy_sum;            /* ms, frames of play since the change */
+static unsigned g_busy_n;
+static double   g_rest_ms = -1;        /* before the change: a frame less the shader, or -1 */
+static double   g_preview_ms = -1;     /* the last write_shaded's shader time */
+
+/* The settings are about to change (or a game to start): what the frame cost
+ * without the shader is kept for the estimate, and the count starts again. */
+static void speed_reset(bool new_game)
+{
+	double ms;
+	unsigned n;
+	int th;
+
+	diatom_port_shade_cost(&ms, &n, &th);
+	if (new_game) g_rest_ms = -1;
+	else if (g_busy_n >= SPEED_MIN_FRAMES)
+		g_rest_ms = g_busy_sum / g_busy_n - (n >= SPEED_MIN_FRAMES ? ms : 0.0);
+	g_busy_sum = 0;
+	g_busy_n = 0;
+}
+
+static void speed_note(double busy_ms)
+{
+	/* a turn the menu or a stall was inside of is not a frame of play */
+	if (busy_ms < 0 || busy_ms > g_frame_ms * 4.0 || g_busy_n >= 1000000u) return;
+	g_busy_sum += busy_ms;
+	g_busy_n++;
+}
+
+/* SHADED's speed fields, after its rect: "\tshade_ms=4.10\tbusy_ms=9.80
+ * \tframe_ms=16.74\tmeasured=1" - busy_ms left out when it cannot be told. */
+static void speed_fields(char *out, size_t n)
+{
+	double ms;
+	unsigned frames;
+	int th;
+	size_t k;
+
+	out[0] = '\0';
+	if (g_frame_ms <= 0) return;
+	diatom_port_shade_cost(&ms, &frames, &th);
+	if (frames >= SPEED_MIN_FRAMES && g_busy_n >= SPEED_MIN_FRAMES) {
+		snprintf(out, n, "\tshade_ms=%.2f\tbusy_ms=%.2f\tframe_ms=%.2f\tmeasured=1",
+		         ms, g_busy_sum / g_busy_n, g_frame_ms);
+		return;
+	}
+	if (g_preview_ms < 0) return;
+	ms = g_preview_ms / (th > 0 ? th : 1);
+	k = (size_t)snprintf(out, n, "\tshade_ms=%.2f", ms);
+	if (k < n && g_rest_ms >= 0)
+		k += (size_t)snprintf(out + k, n - k, "\tbusy_ms=%.2f", g_rest_ms + ms);
+	if (k < n) snprintf(out + k, n - k, "\tframe_ms=%.2f\tmeasured=0", g_frame_ms);
+}
+
 /* --- the frame the core last handed us ----------------------------------- */
 static void       *g_frame;
 static size_t      g_frame_cap;
@@ -242,8 +312,12 @@ static bool write_shaded(const char *path, diatom_rect *where)
 		}
 	}
 	cs_set_params(c, v);
-	if (cs_begin_frame(c, in, w, h, (size_t)w, scale, 0) ||
-	    cs_render_rows(c, band, 0, oh, out, (size_t)ow, &fmt)) goto done;
+	{
+		uint64_t t0 = diatom_port_now_us();
+		if (cs_begin_frame(c, in, w, h, (size_t)w, scale, 0) ||
+		    cs_render_rows(c, band, 0, oh, out, (size_t)ow, &fmt)) goto done;
+		g_preview_ms = (double)(diatom_port_now_us() - t0) / 1000.0;
+	}
 
 	if (!(f = fopen(path, "wb"))) goto done;
 	row = (size_t)ow * 3;
@@ -288,10 +362,13 @@ done:
 static void send_shaded(const char *path)
 {
 	diatom_rect r;
+	char speed[160];
 
-	if (write_shaded(path, &r))
-		diatom_proto_send("SHADED\tpath=%s\tx=%d\ty=%d\tw=%d\th=%d",
-		                  path, r.x, r.y, r.w, r.h);
+	if (write_shaded(path, &r)) {
+		speed_fields(speed, sizeof speed);
+		diatom_proto_send("SHADED\tpath=%s\tx=%d\ty=%d\tw=%d\th=%d%s",
+		                  path, r.x, r.y, r.w, r.h, speed);
+	}
 	else
 		diatom_proto_send("SHADED");
 }
@@ -1289,6 +1366,7 @@ static bool state_plane_msg(const diatom_msg *m)
 	case DIATOM_MSG_SETSHADER:
 		/* ChaOS. Taken at once, mid-game too; then, if asked, the paused
 		 * frame drawn with the new settings, for the menu behind it. */
+		speed_reset(false);
 		diatom_shading_set_file(m->path);
 		if (m->preview[0]) send_shaded(m->preview);
 		return true;
@@ -1503,6 +1581,8 @@ static int run_session_inner(const diatom_session *sn)
 	g_base_h      = (int)av.geometry.base_height;
 	g_base_aspect = (double)av.geometry.aspect_ratio;
 	apply_display(sn->mode, sn->filter);
+	speed_reset(true);
+	g_preview_ms = -1;
 	diatom_shading_start(sn->core, sn->rom, g_base_w);
 	locked_at = 0;
 
@@ -1519,6 +1599,7 @@ static int run_session_inner(const diatom_session *sn)
 	 * Audio drift is not this loop's problem. It is handled by rate control,
 	 * because no panel and no core will ever agree on a rate. */
 	frame_us = 1000000.0 / (av.timing.fps > 0 ? av.timing.fps : 60.0);
+	g_frame_ms = frame_us / 1000.0;
 
 	/* Idle reporting belongs to this game, and this game has not asked yet.
 	 * The launcher's SETIDLE comes behind SETLEVEL, SETMUTE and SETDISPLAY,
@@ -1989,6 +2070,7 @@ static int run_session_inner(const diatom_session *sn)
 
 		next_us += frame_us * periods;
 		now = diatom_port_now_us();
+		if (!fast) speed_note((double)(now - batch_t0) / 1000.0);
 
 		if (next_us > (double)now) {
 			struct timespec ts;

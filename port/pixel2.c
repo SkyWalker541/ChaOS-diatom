@@ -1242,6 +1242,11 @@ void diatom_port_shader(diatom_shader kind, const float *params, int nparams)
 	(void)kind; (void)params; (void)nparams;
 }
 
+void diatom_port_shade_cost(double *ms, unsigned *frames, int *threads)
+{
+	*ms = 0.0; *frames = 0; *threads = 1;
+}
+
 bool diatom_port_bezel(const uint8_t *bgra, int w, int h)
 {
 	(void)w; (void)h;

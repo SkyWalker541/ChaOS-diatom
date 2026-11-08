@@ -42,4 +42,8 @@ void shade_band_hook(void (*fn)(void *ctx, int y0, int y1), void *ctx);
 /* Stop the helper threads and free everything. */
 void shade_shutdown(void);
 
+/* diatom_port_shade_cost's: frames drawn with the settings now in force and
+ * their average ms, and the threads that draw. Any thread. */
+void shade_cost(double *ms, unsigned *frames, int *threads);
+
 #endif

@@ -14,10 +14,10 @@ HDRS    := $(PT)/pt_shader.h $(PT)/pt_math.h ppm.h
 
 all: glref ptc ptref ptref_flat othc frames refs
 
-# crt-lottes-fast and lcd3x (ChaOS)
-OTH     := ../../shaders/crt/crts.c ../../shaders/lcd/lcd3x.c
-othc: othc.c $(OTH) ../../shaders/crt/crts.h ../../shaders/lcd/lcd3x.h ppm.h
-	$(CC) $(PTFLAGS) $(CFLAGS) -I$(PT) -I../../shaders/crt -I../../shaders/lcd -o $@ othc.c $(OTH) -lm
+# crt-lottes-fast, lcd3x and the scanlines (ChaOS)
+OTH     := ../../shaders/crt/crts.c ../../shaders/lcd/lcd3x.c ../../shaders/scan/scanlines.c
+othc: othc.c $(OTH) ../../shaders/crt/crts.h ../../shaders/lcd/lcd3x.h ../../shaders/scan/scanlines.h ppm.h
+	$(CC) $(PTFLAGS) $(CFLAGS) -I$(PT) -I../../shaders/crt -I../../shaders/lcd -I../../shaders/scan -o $@ othc.c $(OTH) -lm
 
 glref: glref.c ppm.h
 	$(CC) -O2 $(CFLAGS) -o $@ glref.c -lEGL -lGLESv2

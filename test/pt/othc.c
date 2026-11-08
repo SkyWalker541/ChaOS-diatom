@@ -1,6 +1,7 @@
-/* The CPU ports of crt-lottes-fast and lcd3x, for comparing with glref.
+/* The CPU ports of crt-lottes-fast, lcd3x and the scanlines, for comparing
+ * with glref.
  *
- *   othc crt|lcd in.ppm scale out.ppm [NAME=value ...]
+ *   othc crt|lcd|scan in.ppm scale out.ppm [NAME=value ...]
  *
  * Draws in three bands, as the device does, to test the bands' seams too.
  */
@@ -13,6 +14,7 @@ static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
 
 #include "crts.h"
 #include "lcd3x.h"
+#include "scanlines.h"
 #include "ppm.h"
 
 int main(int argc, char **argv)
@@ -22,7 +24,7 @@ int main(int argc, char **argv)
 	uint32_t *src, *dst;
 	pt_format fmt = { 16, 8, 0, 0 };
 
-	if (argc < 5) { fprintf(stderr, "usage: othc crt|lcd in.ppm scale out.ppm [NAME=value ...]\n"); return 2; }
+	if (argc < 5) { fprintf(stderr, "usage: othc crt|lcd|scan in.ppm scale out.ppm [NAME=value ...]\n"); return 2; }
 	if (!ppm_read(argv[2], &in)) return 1;
 	s = atoi(argv[3]); w = in.w; h = in.h; ow = w * s; oh = h * s;
 	src = malloc((size_t)w * h * 4);
@@ -62,6 +64,35 @@ int main(int argc, char **argv)
 			crts_band_destroy(bd);
 		}
 		crts_destroy(c);
+	} else if (!strcmp(argv[1], "scan")) {
+		float v[SCAN_NPARAMS];
+		scan_ctx *c = scan_create();
+		for (i = 0; i < SCAN_NPARAMS; i++) v[i] = scan_params[i].def;
+		for (i = 5; i < argc; i++) {
+			char *e = strchr(argv[i], '=');
+			int k;
+			if (!e) continue;
+			*e = 0;
+			k = scan_param_index(argv[i]);
+			if (k < 0) { fprintf(stderr, "no parameter %s\n", argv[i]); return 2; }
+			v[k] = (float)atof(e + 1);
+		}
+		scan_set_params(c, v);
+		if (getenv("BENCH")) {
+			int n = atoi(getenv("BENCH")), r;
+			double t0 = now();
+			for (r = 0; r < n; r++) {
+				scan_begin_frame(c, src, w, h, w, s);
+				scan_render_rows(c, 0, oh, dst, ow, &fmt);
+			}
+			fprintf(stderr, "%.3f ms/frame, %.1f ns/pixel\n", (now() - t0) / n, (now() - t0) * 1e6 / n / ((double)ow * oh));
+		}
+		if (scan_begin_frame(c, src, w, h, w, s)) return 1;
+		for (b = 0; b < 3; b++) {
+			int y0 = oh * b / 3, y1 = oh * (b + 1) / 3;
+			scan_render_rows(c, y0, y1, dst + (size_t)y0 * ow, ow, &fmt);
+		}
+		scan_destroy(c);
 	} else {
 		float v[LCD3X_NPARAMS];
 		lcd3x_ctx *c = lcd3x_create();

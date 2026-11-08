@@ -164,7 +164,9 @@ typedef enum {
 	/* ChaOS. SETSHADER: the launcher's shader settings for the game, from the
 	 * file at `path` (shading.c says its form), sent before RUN and again
 	 * when they change; with `preview` while paused, the paused frame is
-	 * drawn shaded to that BMP and SHADED answers. SETBEZEL: an overlay image
+	 * drawn shaded to that BMP and SHADED answers, with the speed check's
+	 * figures (shade_ms, busy_ms, frame_ms, measured: main.c's speed_fields).
+	 * SETBEZEL: an overlay image
 	 * drawn over every frame, from the DTOV file at `path`; empty removes it. */
 	DIATOM_MSG_SETSHADER,
 	DIATOM_MSG_SETBEZEL,

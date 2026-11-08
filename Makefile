@@ -14,7 +14,7 @@ PORT ?= desktop
 
 CC      ?= cc
 CFLAGS  += -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2
-CFLAGS  += -Iinclude -Isrc -Iport -Ishaders/pt -Ishaders/crt -Ishaders/lcd -Ishaders -Ivendor/rcheevos/include
+CFLAGS  += -Iinclude -Isrc -Iport -Ishaders/pt -Ishaders/crt -Ishaders/lcd -Ishaders/scan -Ishaders -Ivendor/rcheevos/include
 # Header dependency tracking. Without it, changing a struct in diatom.h leaves
 # stale objects calling through old member offsets - which on 2026-08-26 turned
 # serialize_size() into a call to a different function entirely and made state
@@ -32,7 +32,7 @@ SRC   := src/main.c src/rewind.c src/cheevos.c src/core.c src/env.c src/scale.c 
 # Shaders (ChaOS): the host's choice of shader, the CPU ports' shared drawing,
 # and the shaders themselves
 SRC   += src/shading.c port/shade.c shaders/pt/pt_shader.c
-SRC   += shaders/cpu_shader.c shaders/crt/crts.c shaders/lcd/lcd3x.c
+SRC   += shaders/cpu_shader.c shaders/crt/crts.c shaders/lcd/lcd3x.c shaders/scan/scanlines.c
 OBJ   := $(SRC:%.c=$(BUILD)/%.o)
 BIN   := $(BUILD)/diatom
 CONFORM := $(BUILD)/diatom-conform
@@ -71,7 +71,7 @@ $(RC_OBJ): CFLAGS := $(RC_CFLAGS)
 $(BUILD)/shaders/pt/pt_shader.o: CFLAGS += -O3 -fno-trapping-math -fno-math-errno -ffp-contract=off
 # crt-lottes-fast and lcd3x (ChaOS) the same way, and tested the same way
 # (test/pt/othc.c against the GLSL)
-$(BUILD)/shaders/crt/crts.o $(BUILD)/shaders/lcd/lcd3x.o: CFLAGS += -O3 -fno-trapping-math -fno-math-errno -ffp-contract=off
+$(BUILD)/shaders/crt/crts.o $(BUILD)/shaders/lcd/lcd3x.o $(BUILD)/shaders/scan/scanlines.o: CFLAGS += -O3 -fno-trapping-math -fno-math-errno -ffp-contract=off
 
 ifeq ($(PORT),desktop)
   # sdl2-config ships with SDL2 itself; pkg-config is a separate install and is
@@ -222,13 +222,13 @@ check-port: $(PORT_TEST)
 	@./$(PORT_TEST)
 
 $(PORT_TEST): test/port_test.c port/desktop.c port/shade.c shaders/pt/pt_shader.c \
-              shaders/cpu_shader.c shaders/crt/crts.c shaders/lcd/lcd3x.c \
+              shaders/cpu_shader.c shaders/crt/crts.c shaders/lcd/lcd3x.c shaders/scan/scanlines.c \
               port/port_clock.h port/shade.h include/diatom_port.h
 	@mkdir -p $(BUILD)
 	$(CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O1 -g \
-	      -Iinclude -Isrc -Iport -Ishaders/pt -Ishaders/crt -Ishaders/lcd -Ishaders -o $@ test/port_test.c port/desktop.c \
+	      -Iinclude -Isrc -Iport -Ishaders/pt -Ishaders/crt -Ishaders/lcd -Ishaders/scan -Ishaders -o $@ test/port_test.c port/desktop.c \
 	      port/shade.c shaders/pt/pt_shader.c shaders/cpu_shader.c shaders/crt/crts.c \
-	      shaders/lcd/lcd3x.c $(SDL_CFLAGS) $(SDL_LIBS) -lm
+	      shaders/lcd/lcd3x.c shaders/scan/scanlines.c $(SDL_CFLAGS) $(SDL_LIBS) -lm
 
 # Does core-facts.md still describe the cores we ship? It was measured on the
 # device, which needs the hardware and the user's ROMs; this is the half that

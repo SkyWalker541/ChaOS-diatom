@@ -692,6 +692,11 @@ void diatom_port_shader(diatom_shader kind, const float *params, int nparams)
 	shade_set(kind, params, nparams);
 }
 
+void diatom_port_shade_cost(double *ms, unsigned *frames, int *threads)
+{
+	shade_cost(ms, frames, threads);
+}
+
 void diatom_port_overlay(const uint8_t *bgra, int w, int h, unsigned ms)
 {
 	if (!bgra || ms == 0 || w <= 0 || h <= 0) {
