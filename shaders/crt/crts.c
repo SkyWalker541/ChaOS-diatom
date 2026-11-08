@@ -330,22 +330,46 @@ static inline uint32_t finish(const crts_ctx *c, float r, float g, float b, cons
 	       ((uint32_t)c->to_srgb[ib] << f->b_shift) | f->opaque;
 }
 
-/* One game row filtered across every screen column */
+/* One game row filtered across every screen column, planar: R for every
+ * column, then G, then B, so the rows below can take four columns a step */
 static void filter_row(const crts_ctx *c, int gy, float *out)
 {
+	float *oR = out, *oG = out + c->ow, *oB = out + 2 * c->ow;
 	int X;
 	for (X = 0; X < c->ow; X++) {
 		const float *w = c->col_w + X * 4, *t = texel(c, c->col_x0[X], gy);
-		out[X * 3 + 0] = t[0] * w[0] + t[3] * w[1] + t[6] * w[2] + t[9]  * w[3];
-		out[X * 3 + 1] = t[1] * w[0] + t[4] * w[1] + t[7] * w[2] + t[10] * w[3];
-		out[X * 3 + 2] = t[2] * w[0] + t[5] * w[1] + t[8] * w[2] + t[11] * w[3];
+		oR[X] = t[0] * w[0] + t[3] * w[1] + t[6] * w[2] + t[9]  * w[3];
+		oG[X] = t[1] * w[0] + t[4] * w[1] + t[7] * w[2] + t[10] * w[3];
+		oB[X] = t[2] * w[0] + t[5] * w[1] + t[8] * w[2] + t[11] * w[3];
 	}
 }
+
+/* The corner's vignette at screen pixel X of a row: the GLSL's warp is always
+ * on, and at no curvature it still darkens the outermost pixels */
+static inline float vignette(const crts_ctx *c, int X, float rv)
+{
+	const float ih = (float)c->h, ihc = ih * c->corner;
+	return clampf(ih - ihc * (1.0f - c->col_v[X] * rv), 0.0f, 1.0f);
+}
+
+/* One screen pixel, as the GLSL has it */
+static inline uint32_t pixel(const crts_ctx *c, const crts_band *b, int X, float sa,
+                             float sb, const float *mm, float vin, const pt_format *f)
+{
+	const int ow = c->ow;
+	const float *A = b->ha, *B = b->hb;
+	return finish(c, (A[X] * sa + B[X] * sb) * (mm[0] * vin),
+	                 (A[ow + X] * sa + B[ow + X] * sb) * (mm[1] * vin),
+	                 (A[2 * ow + X] * sa + B[2 * ow + X] * sb) * (mm[2] * vin), f);
+}
+
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 
 static void rows_flat(const crts_ctx *c, crts_band *b, int y0, int y1,
                       uint32_t *out, size_t pitch, const pt_format *f)
 {
-	const float ih = (float)c->h, ihc = ih * c->corner;
 	float m[6][3];
 	int Y, X;
 
@@ -353,6 +377,7 @@ static void rows_flat(const crts_ctx *c, crts_band *b, int y0, int y1,
 		int ga = c->row_y0[Y], gb = ga + 1 > c->h - 1 + PADY ? ga : ga + 1;
 		float sa = c->row_a[Y], sb = c->row_b[Y], rv = c->row_v[Y];
 		uint32_t *o = out + (size_t)(Y - y0) * pitch;
+		int xl, xr;
 
 		/* the two game rows this screen row mixes, filtered across once
 		 * each and kept while the next screen rows want them */
@@ -362,15 +387,65 @@ static void rows_flat(const crts_ctx *c, crts_band *b, int y0, int y1,
 		}
 		if (b->yb != gb) { filter_row(c, gb, b->hb); b->yb = gb; }
 		if (Y == y0 || c->mtype == 3) row_masks(c, Y, m);
-		for (X = 0; X < c->ow; X++) {
-			/* the corner's vignette: the GLSL's warp is always on, and at
-			 * no curvature it still darkens the outermost pixels */
-			float vin = clampf(ih - ihc * (1.0f - c->col_v[X] * rv), 0.0f, 1.0f);
-			const float *mm = m[X % 6], *A = b->ha + X * 3, *B = b->hb + X * 3;
-			o[X] = finish(c, (A[0] * sa + B[0] * sb) * (mm[0] * vin),
-			                 (A[1] * sa + B[1] * sb) * (mm[1] * vin),
-			                 (A[2] * sa + B[2] * sb) * (mm[2] * vin), f);
+
+		/* The vignette is exactly 1 but for a few pixels at each end of a
+		 * row (and all of a top or bottom one): those, one at a time as
+		 * the GLSL has them; the run between, where it is 1 and drops out,
+		 * four at a time (ChaOS: about three times as fast on the Brick's
+		 * A53, measured as 15.5 ms a frame before) */
+		for (xl = 0; xl < c->ow && vignette(c, xl, rv) < 1.0f; xl++)
+			o[xl] = pixel(c, b, xl, sa, sb, m[xl % 6], vignette(c, xl, rv), f);
+		for (xr = c->ow; xr > xl && vignette(c, xr - 1, rv) < 1.0f; xr--)
+			o[xr - 1] = pixel(c, b, xr - 1, sa, sb, m[(xr - 1) % 6], vignette(c, xr - 1, rv), f);
+		X = xl;
+#if defined(__ARM_NEON)
+		{
+			/* the mask's pattern, six columns, laid out so any four in a
+			 * row read straight: index X % 12 and the three after */
+			float mr[16], mg[16], mb[16];
+			const float32x4_t vsa = vdupq_n_f32(sa), vsb = vdupq_n_f32(sb);
+			const float32x4_t ty = vdupq_n_f32(c->tone_y), tz = vdupq_n_f32(c->tone_z);
+			const float32x4_t steps = vdupq_n_f32((float)TO_SRGB_STEPS);
+			const float32x4_t zero = vdupq_n_f32(0.0f), half = vdupq_n_f32(0.5f);
+			const float32x4_t eps = vdupq_n_f32(1.0f / (256.0f * 65536.0f));
+			const int ow = c->ow;
+			const float *AR = b->ha, *AG = b->ha + ow, *AB = b->ha + 2 * ow;
+			const float *BR = b->hb, *BG = b->hb + ow, *BB = b->hb + 2 * ow;
+			int k, mi;
+
+			for (k = 0; k < 16; k++) {
+				mr[k] = m[k % 6][0]; mg[k] = m[k % 6][1]; mb[k] = m[k % 6][2];
+			}
+			mi = X % 12;
+			for (; X + 4 <= xr; X += 4) {
+				float32x4_t r = vmulq_f32(vaddq_f32(vmulq_f32(vld1q_f32(AR + X), vsa),
+				                                    vmulq_f32(vld1q_f32(BR + X), vsb)),
+				                          vld1q_f32(mr + mi));
+				float32x4_t g = vmulq_f32(vaddq_f32(vmulq_f32(vld1q_f32(AG + X), vsa),
+				                                    vmulq_f32(vld1q_f32(BG + X), vsb)),
+				                          vld1q_f32(mg + mi));
+				float32x4_t bl = vmulq_f32(vaddq_f32(vmulq_f32(vld1q_f32(AB + X), vsa),
+				                                     vmulq_f32(vld1q_f32(BB + X), vsb)),
+				                           vld1q_f32(mb + mi));
+				float32x4_t peak = vmaxq_f32(eps, vmaxq_f32(r, vmaxq_f32(g, bl)));
+				float32x4_t kk = vdivq_f32(steps, vaddq_f32(vmulq_f32(peak, ty), tz));
+				int32x4_t ir = vcvtq_s32_f32(vaddq_f32(vminq_f32(vmaxq_f32(vmulq_f32(r, kk), zero), steps), half));
+				int32x4_t ig = vcvtq_s32_f32(vaddq_f32(vminq_f32(vmaxq_f32(vmulq_f32(g, kk), zero), steps), half));
+				int32x4_t ib = vcvtq_s32_f32(vaddq_f32(vminq_f32(vmaxq_f32(vmulq_f32(bl, kk), zero), steps), half));
+				int32_t R[4], G[4], Bv[4];
+
+				vst1q_s32(R, ir); vst1q_s32(G, ig); vst1q_s32(Bv, ib);
+				for (k = 0; k < 4; k++)
+					o[X + k] = ((uint32_t)c->to_srgb[R[k]] << f->r_shift) |
+					           ((uint32_t)c->to_srgb[G[k]] << f->g_shift) |
+					           ((uint32_t)c->to_srgb[Bv[k]] << f->b_shift) | f->opaque;
+				mi += 4;
+				if (mi >= 12) mi -= 12;
+			}
 		}
+#endif
+		for (; X < xr; X++)
+			o[X] = pixel(c, b, X, sa, sb, m[X % 6], 1.0f, f);
 	}
 }
 
