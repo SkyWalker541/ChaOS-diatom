@@ -118,7 +118,9 @@ static void recommended(int con, int kind, float *p)
 	if (kind == CS_PT) switch (con) {
 	case CON_GB:  p[PT_GAME_SYSTEM] = 1; p[PT_BACKING_COLOR] = 1; break;
 	case CON_GBC: p[PT_GAME_SYSTEM] = 2; p[PT_BACKING_COLOR] = 1; break;
-	case CON_GBA: p[PT_GAME_SYSTEM] = 4; p[PT_BACKING_COLOR] = 2; break;
+	case CON_GBA: p[PT_GAME_SYSTEM] = 4; p[PT_BACKING_COLOR] = 2;
+	              /* ChaOS: the Grid shows at 4x (chaos src/look.c) */
+	              p[PT_GRID_LINE_WIDTH] = 0.30f; break;
 	}
 	if (kind == CS_CRT) p[cs_param_index(CS_CRT, "CURVATURE")] = 0.0f;
 	/* the scanlines at the game's own height, one dark line a game row,
