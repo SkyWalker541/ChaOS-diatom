@@ -880,6 +880,15 @@ static bool menu_pause(const diatom_session *sn)
 	 * is already on disk. The order is the contract. */
 	if (sn->preview && write_preview(sn->preview))
 		diatom_proto_send("PREVIEW\tpath=%s", sn->preview);
+	/* ChaOS: and the panel as it stands before the launcher draws over it -
+	 * the game with its shader and overlay - for Take Screenshot in the
+	 * in-game menu. Taken now, while the page is still the game's. */
+	if (sn->preview) {
+		char gp[1100];
+		snprintf(gp, sizeof gp, "%s.glass.bmp", sn->preview);
+		if (diatom_port_capture(gp))
+			diatom_proto_send("GLASS\tpath=%s", gp);
+	}
 	/* ChaOS: and the frame as the shader draws it, beside it, for the menu's
 	 * backdrop. Only when the game is shaded. */
 	if (sn->preview && diatom_shading_current(NULL)) {
@@ -1973,9 +1982,10 @@ static int run_session_inner(const diatom_session *sn)
 			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
 			    (buttons & DIATOM_BIT(DIATOM_BTN_L1)) && rewind_on())
 				menu_chorded = true;
-			/* ChaOS: MENU+X, a screenshot: the frame as the core drew it,
-			 * to a file the launcher files under the game and tells the
-			 * player about. A chord too. */
+			/* ChaOS: MENU+X, a screenshot: what the panel is showing right
+			 * now - the game with its shader and overlay, as the player
+			 * sees it - to a file the launcher files under the game and
+			 * tells the player about. A chord too. */
 			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
 			    (pressed & DIATOM_BIT(DIATOM_BTN_X))) {
 				static unsigned shot_n;
@@ -1983,7 +1993,7 @@ static int run_session_inner(const diatom_session *sn)
 
 				menu_chorded = true;
 				snprintf(sp, sizeof sp, "/tmp/diatom-shot-%u.bmp", shot_n++);
-				if (diatom_proto_connected() && write_preview(sp))
+				if (diatom_proto_connected() && diatom_port_capture(sp))
 					diatom_proto_send("SHOT\tpath=%s", sp);
 			}
 			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
