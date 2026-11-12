@@ -402,8 +402,23 @@ static int jack_present(void)
 
 /* Which window the level maps into. See HP_RAW_TOP above: headphones and the
  * speaker want different ceilings AND different floors, so both ends move. */
+/* The top position of the ladder in use: GAIN_LEVELS, or up to GAIN_NIGHT_EXTRA
+ * more when the launcher is in night mode. The bottom is the same ladder run
+ * at the same step width, computed exactly as TortOS does (device/brick.c
+ * vol_bottom), so both sides meet at the same register value. */
+#define GAIN_NIGHT_EXTRA 8
+static int g_gain_levels = GAIN_LEVELS;
+
 static int gain_top(void)  { return jack_present() ? HP_RAW_TOP    : SPK_RAW_TOP; }
-static int gain_bot(void)  { return jack_present() ? HP_RAW_BOTTOM : SPK_RAW_BOTTOM; }
+static int gain_bot(void)
+{
+	int top = gain_top(), bot = jack_present() ? HP_RAW_BOTTOM : SPK_RAW_BOTTOM;
+	long b;
+
+	if (g_gain_levels <= GAIN_LEVELS) return bot;
+	b = top + ((long)(bot - top) * g_gain_levels + GAIN_LEVELS / 2) / GAIN_LEVELS;
+	return b > GAIN_RAW_MAX ? GAIN_RAW_MAX : (int)b;
+}
 
 /* Positions to the register and back; the inverted register never leaves this
  * file. The register is the window as it stands, 0 loudest (port/ladder.h). A
@@ -412,11 +427,11 @@ static int gain_bot(void)  { return jack_present() ? HP_RAW_BOTTOM : SPK_RAW_BOT
  * was not us. */
 static int level_to_raw(int lv)
 {
-	return ladder_window_raw(lv, GAIN_LEVELS, gain_top(), gain_bot());
+	return ladder_window_raw(lv, g_gain_levels, gain_top(), gain_bot());
 }
 static int raw_to_level(int raw)
 {
-	return ladder_window_pos(raw, GAIN_LEVELS, gain_top(), gain_bot());
+	return ladder_window_pos(raw, g_gain_levels, gain_top(), gain_bot());
 }
 
 static int ctl_io(const char *name, long *val, int write)
@@ -2104,12 +2119,25 @@ void diatom_port_level_invalidate(void)
 	g_jack_was = -1;
 }
 
+/* The launcher's ladder, when it is not the usual one: 21 positions, or 29 in
+ * night mode. Anything else is refused and rescaled as before. */
+bool diatom_port_level_scale(diatom_level_kind kind, int positions)
+{
+	int top = positions - 1;
+
+	if (kind != DIATOM_LEVEL_VOLUME || g_mixer_fd < 0) return false;
+	if (top < GAIN_LEVELS || top > GAIN_LEVELS + GAIN_NIGHT_EXTRA) return false;
+	g_gain_levels = top;
+	g_osd_max     = top;
+	return true;
+}
+
 /* Positions, not a maximum index, so one MORE than the internal level ceiling.
  * That off-by-one is the whole reason the state plane pins the word. */
 int diatom_port_level_positions(diatom_level_kind kind)
 {
 	switch (kind) {
-	case DIATOM_LEVEL_VOLUME:     return g_mixer_fd >= 0 ? GAIN_LEVELS + 1 : 0;
+	case DIATOM_LEVEL_VOLUME:     return g_mixer_fd >= 0 ? g_gain_levels + 1 : 0;
 	case DIATOM_LEVEL_BRIGHTNESS: return g_disp_fd >= 0 ? BRIGHT_LEVELS + 1 : 0;
 	default:                      return 0;
 	}

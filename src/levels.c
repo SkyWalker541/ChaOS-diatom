@@ -55,6 +55,8 @@ bool diatom_levels_set(diatom_level_kind kind, int index, int count)
 	int positions = diatom_port_level_positions(kind);
 
 	if (positions <= 0) return false;
+	if (count != positions && diatom_port_level_scale(kind, count))
+		positions = diatom_port_level_positions(kind);
 	g_pos[kind] = rescale(index, count, positions);
 	diatom_port_level_write(kind, g_pos[kind]);
 	return true;

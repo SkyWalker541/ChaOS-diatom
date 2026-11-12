@@ -1523,6 +1523,8 @@ void diatom_port_level_invalidate(void)
 	g_jack_was = -1;
 }
 
+bool diatom_port_level_scale(diatom_level_kind kind, int positions) { (void)kind; (void)positions; return false; }
+
 int diatom_port_level_positions(diatom_level_kind kind)
 {
 	/* Asked every frame, so the backlight is looked for once, not read each

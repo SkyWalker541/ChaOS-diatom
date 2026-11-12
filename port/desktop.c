@@ -558,6 +558,7 @@ void diatom_port_log(diatom_log_level lvl, const char *msg)
  * makes `LEVELS count=0` the answer to a launcher's query, which tells it not
  * to expect events rather than leaving it to infer that from silence. */
 int  diatom_port_level_positions(diatom_level_kind kind) { (void)kind; return 0; }
+bool diatom_port_level_scale(diatom_level_kind kind, int positions) { (void)kind; (void)positions; return false; }
 int  diatom_port_level_read(diatom_level_kind kind) { (void)kind; return -1; }
 void diatom_port_level_write(diatom_level_kind kind, int pos) { (void)kind; (void)pos; }
 uint32_t diatom_port_level_keys(void) { return 0; }

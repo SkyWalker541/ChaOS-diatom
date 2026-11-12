@@ -310,6 +310,11 @@ typedef enum {
 /* How many positions this device has for `kind`, or 0 if it has no control
  * over it. */
 int  diatom_port_level_positions(diatom_level_kind kind);
+/* Adopts a ladder of `positions` rungs when the host sends a count the port
+ * can make, so a longer ladder (the launcher's night mode) keeps its steps
+ * instead of being squashed into the usual ones. Returns false when the port
+ * has no such ladder, and the state plane rescales as before. */
+bool diatom_port_level_scale(diatom_level_kind kind, int positions);
 
 /* Where the hardware is now, as a position, or -1 if it cannot be read. A
  * register left outside the port's window by another program reads as the
