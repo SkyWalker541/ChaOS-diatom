@@ -2281,10 +2281,10 @@ int main(int argc, char **argv)
 	/* ChaOS: which build this is, first in every log. */
 	for (i = 1; i < argc; i++)
 		if (!strcmp(argv[i], "--version")) {
-			printf("ChaOS-diatom %s, from diatom c52c347\n", CHAOS_DIATOM_VERSION);
+			printf("ChaOS-diatom %s, from diatom 85f43e2\n", CHAOS_DIATOM_VERSION);
 			return 0;
 		}
-	printf("diatom: ChaOS-diatom %s, from diatom c52c347\n", CHAOS_DIATOM_VERSION);
+	printf("diatom: ChaOS-diatom %s, from diatom 85f43e2\n", CHAOS_DIATOM_VERSION);
 
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--core") && i + 1 < argc) core_path = argv[++i];
