@@ -57,14 +57,14 @@
 
 enum { CON_NONE, CON_GB, CON_GBC, CON_GBA,
        CON_NES, CON_SMS, CON_MD, CON_PCE, CON_SFC,
-       CON_GG, CON_NGP, CON_NGPC, CON_COUNT };
+       CON_GG, CON_NGP, CON_NGPC, CON_PS, CON_COUNT };
 static const char *const CON_NAME[CON_COUNT] = {
-	"", "gb", "gbc", "gba", "nes", "sms", "md", "pce", "sfc", "gg", "ngp", "ngpc"
+	"", "gb", "gbc", "gba", "nes", "sms", "md", "pce", "sfc", "gg", "ngp", "ngpc", "ps"
 };
 /* Each console's shader */
 static const int CON_KIND[CON_COUNT] = {
 	CS_NONE, CS_PT, CS_PT, CS_PT, CS_CRT, CS_CRT, CS_CRT, CS_CRT, CS_CRT,
-	CS_LCD, CS_LCD, CS_LCD
+	CS_LCD, CS_LCD, CS_LCD, CS_CRT
 };
 #define MAXP 64
 
