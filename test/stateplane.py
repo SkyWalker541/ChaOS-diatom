@@ -314,6 +314,17 @@ send("SETMUTE\ton=true"); got = drain(2.0)
 check_that("a value that is not 1 releases rather than holds",
            any(l == "MUTE\ton=0" for l in got), got)
 
+# Cheats (ChaOS): a code and a memory write taken mid-game, and cleared.
+chf = "/tmp/diatom-stateplane-cheats.txt"
+with open(chf, "w") as f:
+    f.write("C\t7E0DBE09\nM\t5 3 1 77 0 0 1 1 0\nnot a cheat\n")
+send(f"SETCHEATS\tpath={chf}"); got = drain(1.0)
+check_that("SETCHEATS takes a code and a memory write",
+           any(l == "CHEATS\tcodes=1\tmemory=1\tpaused=0" for l in got), got)
+send("SETCHEATS\tpath="); got = drain(1.0)
+check_that("and an empty path clears them",
+           any(l == "CHEATS\tcodes=0\tmemory=0\tpaused=0" for l in got), got)
+
 # Quiet. Unlike mute this one IS this host's to do, so the sound itself is
 # checked, below, once the process has gone and the tap is flushed.
 send("SPEED"); got = drain(1.0)

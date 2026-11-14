@@ -28,7 +28,7 @@ LDFLAGS += -lz
 # Objects live under build/$(PORT)/ so host and cross builds cannot collide:
 # a leftover x86 main.o in a device link fails late and confusingly.
 BUILD := build/$(PORT)
-SRC   := src/main.c src/rewind.c src/cheevos.c src/core.c src/env.c src/scale.c src/audio.c src/save.c src/proto.c src/options.c src/zip.c src/levels.c port/$(PORT).c
+SRC   := src/main.c src/rewind.c src/cheats.c src/cheevos.c src/core.c src/env.c src/scale.c src/audio.c src/save.c src/proto.c src/options.c src/zip.c src/levels.c port/$(PORT).c
 # Shaders (ChaOS): the host's choice of shader, the CPU ports' shared drawing,
 # and the shaders themselves
 SRC   += src/shading.c port/shade.c shaders/pt/pt_shader.c
@@ -113,7 +113,7 @@ ifeq ($(PORT),pixel2)
   LDFLAGS += $(shell $(PKG_CONFIG) --libs $(PIXEL2_PKGS)) -lm -ldl -lpthread
 endif
 
-.PHONY: all clean check check-seam check-proto check-port \
+.PHONY: all clean check check-seam check-proto check-port check-cheats \
         check-cheevos check-asan stub run-stub
 
 all: $(BIN)
@@ -146,7 +146,7 @@ $(BUILD)/%.o: %.c
 # backend exists. Cheap to check, so check it.
 # Mechanical checks, each guarding a rule that decays the moment nothing fails
 # when it is broken: check-seam has held since day one for exactly that reason.
-check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind
+check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats
 
 # The checks that run without SDL, built with AddressSanitizer and
 # UndefinedBehaviorSanitizer into build/asan, so an overrun, a use after free
@@ -170,6 +170,11 @@ check-asan:
 	         CC="$(CC) $(SANITIZE)"
 
 # Rewind (ChaOS): a fake core run forward and stepped back, offline
+check-cheats:
+	@mkdir -p $(BUILD)
+	$(CC) -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc -o $(BUILD)/cheats_test test/cheats_test.c src/cheats.c
+	@$(BUILD)/cheats_test
+
 check-rewind:
 	@mkdir -p $(BUILD)
 	$(CC) -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc -o $(BUILD)/rewind_test test/rewind_test.c src/rewind.c

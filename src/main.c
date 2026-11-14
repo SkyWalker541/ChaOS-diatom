@@ -25,6 +25,7 @@
 #include "levels.h"
 #include "shading.h"
 #include "rewind.h"
+#include "cheats.h"
 
 #ifndef CHAOS_DIATOM_VERSION
 #define CHAOS_DIATOM_VERSION "0.0"   /* from the VERSION file, by the Makefile */
@@ -1327,6 +1328,19 @@ static bool state_plane_msg(const diatom_msg *m)
 	case DIATOM_MSG_SETAUDIO: audio_set(m);      return true;
 	case DIATOM_MSG_MUTE:     mute_emit();       return true;
 	case DIATOM_MSG_SETMUTE:  mute_set(m);       return true;
+	case DIATOM_MSG_SETCHEATS: {
+		/* ChaOS. Taken at once, mid-game. Any cheat in force puts the
+		 * achievement set away for the rest of the game, as RetroAchievements
+		 * asks: an unlock earned with a cheat on is not one. Answered with
+		 * what was taken, and whether that put achievements away. */
+		int codes = 0, mem = 0;
+		bool had = diatom_cheevos_active();
+		diatom_cheats_load(g_core, m->path, &codes, &mem);
+		if (diatom_cheats_on() && had) diatom_cheevos_unload();
+		diatom_proto_send("CHEATS\tcodes=%d\tmemory=%d\tpaused=%d",
+		                  codes, mem, had && diatom_cheats_on() ? 1 : 0);
+		return true;
+	}
 	case DIATOM_MSG_SETREWIND:
 		rewind_set(m->on == 1);
 		diatom_proto_send("REWIND\ton=%d", rewind_on() ? 1 : 0);
@@ -1379,7 +1393,8 @@ static bool state_plane_msg(const diatom_msg *m)
 	case DIATOM_MSG_CHEEVOS: diatom_cheevos_emit(); return true;
 	case DIATOM_MSG_SETCHEEVOS:
 		if (m->console) diatom_cheevos_set_console((unsigned)m->console);
-		diatom_cheevos_load(m->path);
+		/* ChaOS: not while cheats are in force, however late the set came */
+		if (!diatom_cheats_on()) diatom_cheevos_load(m->path);
 		diatom_cheevos_emit();
 		return true;
 	default: return false;
@@ -1444,6 +1459,7 @@ static int run_session_inner(const diatom_session *sn)
 	g_speed = 1;
 	g_audio_fast = false;
 	rewind_reset();
+	diatom_cheats_game(g_core);
 	g_present_frames = 0;
 	g_present_us = 0;
 	g_frame_w = g_frame_h = 0;
@@ -1782,6 +1798,7 @@ static int run_session_inner(const diatom_session *sn)
 			 * the previous frame, so they have to be evaluated once per frame,
 			 * here, and not over a socket at 10Hz. Every frame the game runs,
 			 * fast or not. */
+			diatom_cheats_frame(g_core);   /* ChaOS: memory cheats, if any */
 			diatom_cheevos_frame();
 			rewind_after_frame(g_core);
 

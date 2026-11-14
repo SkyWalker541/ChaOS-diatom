@@ -100,6 +100,8 @@ uint32_t diatom_cheevos_peek(uint32_t address, uint32_t num_bytes, void *ud);
  * path unloads. Returns the number of achievements now being watched. */
 int  diatom_cheevos_load(const char *path);
 void diatom_cheevos_unload(void);
+/* ChaOS: a set is loaded and watching */
+bool diatom_cheevos_active(void);
 
 /* One frame of evaluation, called after retro_run and before anything can
  * change memory again. Emits CHEEVO to the launcher as things fire. Cheap and

@@ -719,6 +719,11 @@ void diatom_cheevos_unload(void)
 	g_nloaded = 0;
 }
 
+bool diatom_cheevos_active(void)
+{
+	return g_rt_live && g_nloaded > 0;
+}
+
 int diatom_cheevos_load(const char *path)
 {
 	/* getline, not a fixed buffer, and this is measured rather than cautious.

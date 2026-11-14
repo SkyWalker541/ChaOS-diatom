@@ -93,6 +93,10 @@ bool diatom_core_open(diatom_core *c, const char *path)
 	BIND(unserialize,                "retro_unserialize");
 	BIND(get_memory_data,            "retro_get_memory_data");
 	BIND(get_memory_size,            "retro_get_memory_size");
+	/* ChaOS: cheats. Every core exports both, as the API requires, but not
+	 * every core does anything in them; not having them is no failure. */
+	(void)bind_sym(c->handle, &c->cheat_reset, "retro_cheat_reset");
+	(void)bind_sym(c->handle, &c->cheat_set,   "retro_cheat_set");
 
 	return true;
 }

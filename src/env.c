@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "cheevos.h"
+#include "cheats.h"
 #include "diatom.h"
 
 #define MASK(x) ((x) & 0xffff)   /* experimental commands carry 0x10000 */
@@ -311,6 +312,7 @@ static bool env_cb(unsigned cmd, void *data)
 	 * the duration of this call. */
 	case MASK(RETRO_ENVIRONMENT_SET_MEMORY_MAPS):
 		diatom_cheevos_note_map(data);
+		diatom_cheats_note_map(data);   /* ChaOS */
 		return true;
 	case MASK(RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS):
 		diatom_cheevos_note_support(data ? *(const bool *)data : true);

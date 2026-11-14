@@ -197,6 +197,7 @@ static void parse_line(char *line, diatom_msg *out)
 	else if (!strcmp(field, "LOWBATTERY"))    out->kind = DIATOM_MSG_LOWBATTERY;
 	else if (!strcmp(field, "SETLOWBATTERY")) out->kind = DIATOM_MSG_SETLOWBATTERY;
 	else if (!strcmp(field, "SETREWIND"))     out->kind = DIATOM_MSG_SETREWIND;
+	else if (!strcmp(field, "SETCHEATS"))     out->kind = DIATOM_MSG_SETCHEATS;
 	else {
 		log_(DIATOM_LOG_WARN, "proto: ignoring unknown verb '%s'", field);
 		out->kind = DIATOM_MSG_NONE;

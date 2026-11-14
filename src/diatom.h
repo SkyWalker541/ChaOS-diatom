@@ -62,6 +62,9 @@ typedef struct {
 	bool   (*unserialize)(const void *, size_t);
 	void  *(*get_memory_data)(unsigned);
 	size_t (*get_memory_size)(unsigned);
+	/* ChaOS: optional, NULL where a core lacks them */
+	void   (*cheat_reset)(void);
+	void   (*cheat_set)(unsigned, bool, const char *);
 } diatom_core;
 
 /* zip.c - launcher libraries arrive zipped, one ROM per archive */
@@ -187,6 +190,7 @@ typedef enum {
 	DIATOM_MSG_LOWBATTERY,   /* report whether the low-battery disc is shown */
 	DIATOM_MSG_SETLOWBATTERY,/* show it over the game, or not: `on`, `blink` */
 	DIATOM_MSG_SETREWIND,  /* ChaOS: keep states to rewind to, `on` = 1 | 0 */
+	DIATOM_MSG_SETCHEATS,  /* ChaOS: the cheats in force are those in `path`; "" none */
 	/* The launcher went away - or was displaced by a newer one, which means
 	 * the same thing. The game keeps running. */
 	DIATOM_MSG_HANGUP
