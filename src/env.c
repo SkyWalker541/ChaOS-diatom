@@ -181,6 +181,50 @@ static void core_log(enum retro_log_level level, const char *fmt, ...)
 	diatom_port_log(l, buf);
 }
 
+/* ---- discs (ChaOS) --------------------------------------------------------
+ *
+ * A game on more than one disc - Final Fantasy VII's three - is loaded as an
+ * .m3u listing them, and the core hands over its disc tray: how many images,
+ * which is in, and a way to open the tray, change the disc and close it. Taken
+ * in either form, the old one without labels as well. The launcher's Disc row
+ * asks for it with DISC and changes it with SETDISC. */
+static struct retro_disk_control_ext_callback g_disk;
+static bool g_disk_set;
+
+int diatom_env_disc_count(void)
+{
+	return g_disk_set && g_disk.get_num_images ? (int)g_disk.get_num_images() : 0;
+}
+
+int diatom_env_disc_index(void)
+{
+	return g_disk_set && g_disk.get_image_index ? (int)g_disk.get_image_index() : -1;
+}
+
+bool diatom_env_disc_label(int i, char *out, size_t n)
+{
+	out[0] = '\0';
+	if (!g_disk_set || !g_disk.get_image_label) return false;
+	return g_disk.get_image_label((unsigned)i, out, n) && out[0];
+}
+
+bool diatom_env_disc_set(int i)
+{
+	int n = diatom_env_disc_count();
+
+	if (n <= 0 || i < 0 || i >= n || !g_disk.set_eject_state || !g_disk.set_image_index)
+		return false;
+	if (i == diatom_env_disc_index()) return true;
+	/* Open, change, close: what the disc tray does, and the only order a
+	 * core takes a new image in */
+	if (!g_disk.set_eject_state(true)) return false;
+	if (!g_disk.set_image_index((unsigned)i)) {
+		g_disk.set_eject_state(false);
+		return false;
+	}
+	return g_disk.set_eject_state(false);
+}
+
 static bool env_cb(unsigned cmd, void *data)
 {
 	switch (MASK(cmd)) {
@@ -325,6 +369,30 @@ static bool env_cb(unsigned cmd, void *data)
 		return true;
 
 	/* ---- misc ------------------------------------------------------------ */
+	case MASK(RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION):
+		if (data) *(unsigned *)data = 1;
+		return true;
+	case MASK(RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE):
+		memset(&g_disk, 0, sizeof g_disk);
+		if (data) g_disk = *(const struct retro_disk_control_ext_callback *)data;
+		g_disk_set = data != NULL;
+		return true;
+	case MASK(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE): {
+		/* The first form: the same tray without labels */
+		const struct retro_disk_control_callback *d = data;
+		memset(&g_disk, 0, sizeof g_disk);
+		if (d) {
+			g_disk.set_eject_state = d->set_eject_state;
+			g_disk.get_eject_state = d->get_eject_state;
+			g_disk.get_image_index = d->get_image_index;
+			g_disk.set_image_index = d->set_image_index;
+			g_disk.get_num_images  = d->get_num_images;
+			g_disk.replace_image_index = d->replace_image_index;
+			g_disk.add_image_index = d->add_image_index;
+		}
+		g_disk_set = d != NULL;
+		return true;
+	}
 	case MASK(RETRO_ENVIRONMENT_GET_LOG_INTERFACE):
 		((struct retro_log_callback *)data)->log = core_log;
 		return true;
@@ -735,6 +803,9 @@ void diatom_env_bind(diatom_core *c, diatom_policy *p, diatom_port_caps *caps)
 	/* The last core's, and never this one's: a core that wants it hands it
 	 * over again as it loads the game (mGBA does, in retro_load_game). */
 	g_frame_status = NULL;
+	/* And the last core's disc tray (ChaOS) */
+	memset(&g_disk, 0, sizeof g_disk);
+	g_disk_set = false;
 
 	/* Bind the option table BEFORE set_environment: a core declares its
 	 * options from inside that call, and they must land in its own table. */

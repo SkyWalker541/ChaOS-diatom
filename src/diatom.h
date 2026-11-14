@@ -118,6 +118,15 @@ void diatom_env_core_log_summary(void);
 void diatom_env_frame_shown(bool shown);
 bool diatom_env_frame_skippable(void);
 
+/* ChaOS: the disc tray of a game on more than one disc. count 0 when the core
+ * has none (or the game is one disc); index the disc in, from 0; label the
+ * core's name for disc i, false when it has none; set changes the disc, the
+ * way the tray does - open, change, close. */
+int  diatom_env_disc_count(void);
+int  diatom_env_disc_index(void);
+bool diatom_env_disc_label(int i, char *out, size_t n);
+bool diatom_env_disc_set(int i);
+
 /* options.c - what a core can be configured with, and what it currently is.
  *
  * Diatom holds the definitions and the values; the LAUNCHER decides what the
@@ -191,6 +200,8 @@ typedef enum {
 	DIATOM_MSG_SETLOWBATTERY,/* show it over the game, or not: `on`, `blink` */
 	DIATOM_MSG_SETREWIND,  /* ChaOS: keep states to rewind to, `on` = 1 | 0 */
 	DIATOM_MSG_SETCHEATS,  /* ChaOS: the cheats in force are those in `path`; "" none */
+	DIATOM_MSG_DISC,       /* ChaOS: report the discs, and which is in */
+	DIATOM_MSG_SETDISC,    /* ChaOS: put disc `index` in, from 0 */
 	/* The launcher went away - or was displaced by a newer one, which means
 	 * the same thing. The game keeps running. */
 	DIATOM_MSG_HANGUP

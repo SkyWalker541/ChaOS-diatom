@@ -1310,6 +1310,30 @@ static void *premap_cores(void *dir)
 /* Shared by all three message loops. A launcher may read or write any of this
  * whenever it likes: the two moments it is drawing - menu and idle - are
  * exactly the moments Diatom is not, and it is no less valid mid-game. */
+/* ChaOS: the discs. "DISC\tcount=3\tindex=0\tlabels=FF7 (Disc 1)|..." - the
+ * labels the core gives, joined with |, which no file name on a card has
+ * reason to carry; empty where it gives none. count=0 for a one-disc game. */
+static void disc_emit(void)
+{
+	char labels[1024] = "", one[128];
+	/* Only with a game in: the core's tray is its own until then, and after
+	 * a game it refused, there is nothing in it to ask about */
+	int n = g_core && g_core->game_loaded ? diatom_env_disc_count() : 0, i;
+	size_t used = 0;
+
+	for (i = 0; i < n; i++) {
+		size_t l;
+		if (!diatom_env_disc_label(i, one, sizeof one)) one[0] = '\0';
+		for (l = 0; one[l]; l++)
+			if (one[l] == '|' || one[l] == '\t' || one[l] == '\n') one[l] = ' ';
+		if (used + l + 2 >= sizeof labels) break;
+		used += (size_t)snprintf(labels + used, sizeof labels - used, "%s%s",
+		                         i ? "|" : "", one);
+	}
+	diatom_proto_send("DISC\tcount=%d\tindex=%d\tlabels=%s", n,
+	                  n > 0 ? diatom_env_disc_index() : -1, labels);
+}
+
 static bool state_plane_msg(const diatom_msg *m)
 {
 	switch (m->kind) {
@@ -1328,6 +1352,12 @@ static bool state_plane_msg(const diatom_msg *m)
 	case DIATOM_MSG_SETAUDIO: audio_set(m);      return true;
 	case DIATOM_MSG_MUTE:     mute_emit();       return true;
 	case DIATOM_MSG_SETMUTE:  mute_set(m);       return true;
+	case DIATOM_MSG_DISC:    disc_emit();  return true;
+	case DIATOM_MSG_SETDISC:
+		if (!g_core || !g_core->game_loaded || !diatom_env_disc_set(m->index))
+			diatom_proto_send("ERROR\tcode=bad_disc\tmsg=%d", m->index);
+		disc_emit();
+		return true;
 	case DIATOM_MSG_SETCHEATS: {
 		/* ChaOS. Taken at once, mid-game. Any cheat in force puts the
 		 * achievement set away for the rest of the game, as RetroAchievements
