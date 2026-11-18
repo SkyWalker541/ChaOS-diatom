@@ -72,6 +72,9 @@ enum {
 	DIATOM_BTN_A, DIATOM_BTN_B, DIATOM_BTN_X, DIATOM_BTN_Y,
 	DIATOM_BTN_L1, DIATOM_BTN_R1, DIATOM_BTN_L2, DIATOM_BTN_R2,
 	DIATOM_BTN_SELECT, DIATOM_BTN_START,
+	/* ChaOS: the sticks pressed in, on a device that has sticks (the TrimUI
+	 * Brick Pro) */
+	DIATOM_BTN_L3, DIATOM_BTN_R3,
 	/* Diatom's own key: never forwarded to a core. The port REPORTS it like
 	 * any other button and does not act on it - what MENU means is host
 	 * policy, and it differs by mode. Standalone it ends the session; under
@@ -284,6 +287,10 @@ uint32_t diatom_port_input_state(void);
  * was three more steps on resume, measured on the GKD Pixel 2 2026-10-02. So
  * the queue is thrown away, and what is held is read from the device as it is
  * now. */
+/* ChaOS: the sticks, on a device that has them: left X and Y, right X and Y,
+ * as libretro has them (-32768 left or up to 32767 right or down, 0 at rest,
+ * the dead zone taken out). False, and all 0, on a device without. */
+bool     diatom_port_input_axes(int16_t out[4]);
 void     diatom_port_input_reset(void);
 
 /* Levels the user can change with the device's own keys while a game runs -

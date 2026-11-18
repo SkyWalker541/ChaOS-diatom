@@ -225,6 +225,43 @@ bool diatom_env_disc_set(int i)
 	return g_disk.set_eject_state(false);
 }
 
+/* ---- ChaOS: sticks -----------------------------------------------------------
+ *
+ * On a device with sticks (the Brick Pro), a core that reads them gets them as
+ * RETRO_DEVICE_ANALOG, and a PlayStation game a DualShock to read them with.
+ * Every other core, never asking for an axis, has the left stick as its d-pad
+ * as well, so a game that only knows a d-pad can be played with either. */
+static unsigned g_analog_device;     /* the core's DualShock, or 0 */
+static bool     g_core_reads_axes;   /* this game asked for an axis */
+static int      g_stick_dpad = -1;   /* the launcher's Left Stick as D-Pad; -1 not said */
+
+void diatom_env_stick_dpad(int on) { g_stick_dpad = on; }
+
+static void note_controllers(const void *data)
+{
+	const struct retro_controller_info *ci = data;
+	unsigned i;
+
+	g_analog_device = 0;
+	if (!ci || !ci[0].types) return;
+	for (i = 0; i < ci[0].num_types; i++) {
+		const char *d = ci[0].types[i].desc;
+
+		if (d && (strstr(d, "DualShock") || strstr(d, "dualshock") || strstr(d, "Dualshock"))) {
+			g_analog_device = ci[0].types[i].id;
+			return;
+		}
+	}
+}
+
+unsigned diatom_env_analog_device(void)
+{
+	int16_t ax[4];
+
+	g_core_reads_axes = false;
+	return diatom_port_input_axes(ax) ? g_analog_device : 0;
+}
+
 static bool env_cb(unsigned cmd, void *data)
 {
 	switch (MASK(cmd)) {
@@ -346,7 +383,12 @@ static bool env_cb(unsigned cmd, void *data)
 
 	/* ---- accepted and ignored ------------------------------------------- */
 	case MASK(RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL):
+		return true;
 	case MASK(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO):
+		/* ChaOS: a pad with sticks, when the core has one for port 0 - the
+		 * PlayStation's DualShock - taken on a device with sticks
+		 * (diatom_env_analog_device) */
+		note_controllers(data);
 		return true;
 
 	/* ---- kept for achievements ------------------------------------------- */
@@ -421,7 +463,7 @@ static void cb_input_poll(void)
  * Order matches the enum. */
 static const char *const button_names[DIATOM_BTN_COUNT] = {
 	"up", "down", "left", "right", "a", "b", "x", "y",
-	"l1", "r1", "l2", "r2", "select", "start", "menu"
+	"l1", "r1", "l2", "r2", "select", "start", "l3", "r3", "menu"
 };
 
 /* Canonical Diatom buttons -> retropad. Near-identity by design; its purpose is
@@ -445,6 +487,8 @@ static int button_map[DIATOM_BTN_COUNT] = {
 	[DIATOM_BTN_R2]     = RETRO_DEVICE_ID_JOYPAD_R2,
 	[DIATOM_BTN_SELECT] = RETRO_DEVICE_ID_JOYPAD_SELECT,
 	[DIATOM_BTN_START]  = RETRO_DEVICE_ID_JOYPAD_START,
+	[DIATOM_BTN_L3]     = RETRO_DEVICE_ID_JOYPAD_L3,
+	[DIATOM_BTN_R3]     = RETRO_DEVICE_ID_JOYPAD_R3,
 	[DIATOM_BTN_MENU]   = -1,          /* Diatom's own; never reaches a core */
 };
 
@@ -702,10 +746,34 @@ static int16_t cb_input_state(unsigned port, unsigned device,
 	uint32_t state;
 	int b;
 
-	(void)index;
+	if (port == 0 && device == RETRO_DEVICE_ANALOG) {
+		int16_t ax[4];
+
+		g_core_reads_axes = true;
+		if (!diatom_port_input_axes(ax) || id > RETRO_DEVICE_ID_ANALOG_Y) return 0;
+		if (index == RETRO_DEVICE_INDEX_ANALOG_LEFT)  return ax[id];
+		if (index == RETRO_DEVICE_INDEX_ANALOG_RIGHT) return ax[2 + id];
+		return 0;
+	}
 	if (port != 0 || device != RETRO_DEVICE_JOYPAD) return 0;
 
 	state = diatom_port_input_state() & ~g_suppress;
+
+	/* ChaOS: the left stick as the d-pad - as the launcher's Left Stick as
+	 * D-Pad says, else for a core that reads no axis: pushed past half its
+	 * way, past the dead zone */
+	if ((g_stick_dpad == 1 || (g_stick_dpad < 0 && !g_core_reads_axes)) && id <= RETRO_DEVICE_ID_JOYPAD_RIGHT &&
+	    (id == RETRO_DEVICE_ID_JOYPAD_UP || id == RETRO_DEVICE_ID_JOYPAD_DOWN ||
+	     id == RETRO_DEVICE_ID_JOYPAD_LEFT || id == RETRO_DEVICE_ID_JOYPAD_RIGHT)) {
+		int16_t ax[4];
+
+		if (diatom_port_input_axes(ax)) {
+			if (id == RETRO_DEVICE_ID_JOYPAD_UP    && ax[1] < -16384) return 1;
+			if (id == RETRO_DEVICE_ID_JOYPAD_DOWN  && ax[1] >  16384) return 1;
+			if (id == RETRO_DEVICE_ID_JOYPAD_LEFT  && ax[0] < -16384) return 1;
+			if (id == RETRO_DEVICE_ID_JOYPAD_RIGHT && ax[0] >  16384) return 1;
+		}
+	}
 
 	/* OR, not first-match. Under an identity map no two canonical buttons
 	 * share a target so returning the first was always correct; remapping

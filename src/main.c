@@ -1353,6 +1353,9 @@ static bool state_plane_msg(const diatom_msg *m)
 	case DIATOM_MSG_MUTE:     mute_emit();       return true;
 	case DIATOM_MSG_SETMUTE:  mute_set(m);       return true;
 	case DIATOM_MSG_DISC:    disc_emit();  return true;
+	case DIATOM_MSG_SETSTICKDPAD:
+		diatom_env_stick_dpad(m->on ? 1 : 0);
+		return true;
 	case DIATOM_MSG_SETDISC:
 		if (!g_core || !g_core->game_loaded || !diatom_env_disc_set(m->index))
 			diatom_proto_send("ERROR\tcode=bad_disc\tmsg=%d", m->index);
@@ -1585,7 +1588,14 @@ static int run_session_inner(const diatom_session *sn)
 	 * specific device type needs the controller_type field in diatom_policy,
 	 * which is still unused, and a launcher that knows to ask. Digital-only
 	 * input removes axes, not device types. */
-	g_core->set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
+	{
+		/* ChaOS: on a device with sticks, the core's pad with sticks when it
+		 * has one (the PlayStation's DualShock, which a game not made for
+		 * one reads as an ordinary pad) */
+		unsigned pad = diatom_env_analog_device();
+
+		g_core->set_controller_port_device(0, pad ? pad : RETRO_DEVICE_JOYPAD);
+	}
 
 	/* SRAM first: it is the game's own data and is not optional. A state, if
 	 * the launcher asked for one, is layered on top - and a state that fails

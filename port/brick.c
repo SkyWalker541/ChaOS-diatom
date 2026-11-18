@@ -1993,7 +1993,87 @@ static const struct { int code; int btn; } keymap[] = {
 	{ BTN_TL2,        DIATOM_BTN_L2 },    { BTN_TR2,        DIATOM_BTN_R2 },
 	{ BTN_SELECT,     DIATOM_BTN_SELECT },{ BTN_START,      DIATOM_BTN_START },
 	{ BTN_MODE,       DIATOM_BTN_MENU },
+	/* ChaOS: the Brick Pro's sticks pressed in (brick-pad) */
+	{ BTN_TRIGGER_HAPPY1, DIATOM_BTN_L3 }, { BTN_TRIGGER_HAPPY2, DIATOM_BTN_R3 },
 };
+
+/* ---- ChaOS: the Brick Pro's sticks -------------------------------------------
+ *
+ * brick-pad reports them raw, 0 to 4095 a side (ABS_X, ABS_Y the left, ABS_RX,
+ * ABS_RY the right), as their ADCs read: where the middle is, how far each way
+ * goes and even which way is up are the device's own. ChaOS's Calibrate Sticks
+ * learns them and keeps them in the card's sticks.cfg, a line a direction:
+ *
+ *     lx 0 410 2050 3690     left X: raw axis 0; raw at full left, at rest, at full right
+ *     ly 1 3700 2010 380     left Y: raw axis 1; at full up, at rest, at full down
+ *
+ * A raw axis can be another's (index) and go either way (the ends in either
+ * order). Read at each game's start. Without it, each axis is its own, at
+ * rest where it was when the game began, 1700 each way, X to the right and Y
+ * down as the raw values grow. A dead zone of an eighth is taken out. */
+#define STICKS_CFG   "/mnt/SDCARD/.userdata/brick/sticks.cfg"
+#define STICK_DEAD   0.125
+
+static const int stick_abs[4] = { ABS_X, ABS_Y, ABS_RX, ABS_RY };
+static bool g_sticks;               /* the pad has them */
+static int  g_raw[4];               /* by raw axis, as ABS_X ... ABS_RY */
+static struct { int idx, neg, mid, pos; } g_cal[4];   /* by direction: lx, ly, rx, ry */
+
+static void sticks_load(void)
+{
+	static const char *const name[4] = { "lx", "ly", "rx", "ry" };
+	char line[96];
+	FILE *f;
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		struct input_absinfo ai;
+
+		g_cal[i].idx = i;
+		g_cal[i].mid = g_raw[i];
+		if (g_pad_fd >= 0 && ioctl(g_pad_fd, EVIOCGABS(stick_abs[i]), &ai) == 0) {
+			g_raw[i] = ai.value;
+			g_cal[i].mid = ai.value;
+		}
+		g_cal[i].neg = g_cal[i].mid - 1700;
+		g_cal[i].pos = g_cal[i].mid + 1700;
+	}
+	if (!(f = fopen(STICKS_CFG, "r"))) return;
+	while (fgets(line, sizeof line, f)) {
+		char n[8];
+		int idx, neg, mid, pos;
+
+		if (sscanf(line, "%7s %d %d %d %d", n, &idx, &neg, &mid, &pos) != 5) continue;
+		if (idx < 0 || idx > 3 || neg == mid || pos == mid) continue;
+		for (i = 0; i < 4; i++)
+			if (!strcmp(n, name[i])) {
+				g_cal[i].idx = idx; g_cal[i].neg = neg; g_cal[i].mid = mid; g_cal[i].pos = pos;
+			}
+	}
+	fclose(f);
+}
+
+/* One direction, -32768 to 32767, the dead zone out */
+static int16_t stick_axis(int d)
+{
+	double v, r = g_raw[g_cal[d].idx], mid = g_cal[d].mid;
+	double end = (r >= mid) == (g_cal[d].pos >= mid) ? g_cal[d].pos : g_cal[d].neg;
+	bool plus = end == g_cal[d].pos;
+
+	v = (r - mid) / (end - mid);              /* 0 at rest, 1 at that end */
+	if (v > 1) v = 1;
+	if (v < STICK_DEAD) return 0;
+	v = (v - STICK_DEAD) / (1 - STICK_DEAD);
+	return (int16_t)(plus ? v * 32767 : -v * 32768);
+}
+
+bool diatom_port_input_axes(int16_t out[4])
+{
+	int d;
+
+	for (d = 0; d < 4; d++) out[d] = g_sticks ? stick_axis(d) : 0;
+	return g_sticks;
+}
 
 /* The four level buttons, as level keys: volume on its own two, brightness on
  * the two front keys (BTN_THUMBL and BTN_THUMBR), all on the gamepad. Never
@@ -2053,6 +2133,15 @@ static void input_open(void)
 	if (g_pad_fd < 0) input_scan();
 	if (g_pad_fd < 0)
 		diatom_port_log(DIATOM_LOG_WARN, "brick: no gamepad found; no game input");
+	if (g_pad_fd >= 0) {
+		unsigned long abs[NLONGS(ABS_MAX)];
+
+		memset(abs, 0, sizeof abs);
+		ioctl(g_pad_fd, EVIOCGBIT(EV_ABS, sizeof abs), abs);
+		g_sticks = BIT_IS_SET(abs, ABS_X) && BIT_IS_SET(abs, ABS_RY);
+		if (g_sticks) diatom_port_log(DIATOM_LOG_INFO, "brick: two sticks (Brick Pro)");
+	}
+	sticks_load();
 	pad_resync();
 }
 
@@ -2075,6 +2164,11 @@ void diatom_port_input_poll(void)
 		for (i = 0; i < (size_t)n / sizeof ev[0]; i++) {
 			if (ev[i].type == EV_SYN && ev[i].code == SYN_DROPPED) {
 				pad_resync();
+				continue;
+			}
+			if (ev[i].type == EV_ABS) {
+				for (k = 0; k < 4; k++)
+					if (stick_abs[k] == ev[i].code) g_raw[k] = ev[i].value;
 				continue;
 			}
 			if (ev[i].type != EV_KEY || ev[i].value == 2) continue;
@@ -2105,6 +2199,8 @@ void diatom_port_input_reset(void)
 	SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
 	while (g_pad_fd >= 0 && read(g_pad_fd, ev, sizeof ev) > 0) { }
 	g_level_down = g_level_pressed = 0;
+	/* ChaOS: the sticks as calibrated now, at rest where they are */
+	if (g_sticks) sticks_load();
 	pad_resync();
 }
 

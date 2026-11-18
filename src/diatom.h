@@ -126,6 +126,13 @@ int  diatom_env_disc_count(void);
 int  diatom_env_disc_index(void);
 bool diatom_env_disc_label(int i, char *out, size_t n);
 bool diatom_env_disc_set(int i);
+/* ChaOS: the core's pad with sticks for port 0 (its DualShock) on a device
+ * with sticks, else 0 for its ordinary pad. Asked once a game is loaded; it
+ * also starts the game's "reads an axis" afresh. */
+unsigned diatom_env_analog_device(void);
+/* ChaOS: the left stick as the d-pad: 1 always, 0 never, -1 (until the
+ * launcher says) for a core that reads no axis */
+void diatom_env_stick_dpad(int on);
 
 /* options.c - what a core can be configured with, and what it currently is.
  *
@@ -201,7 +208,8 @@ typedef enum {
 	DIATOM_MSG_SETREWIND,  /* ChaOS: keep states to rewind to, `on` = 1 | 0 */
 	DIATOM_MSG_SETCHEATS,  /* ChaOS: the cheats in force are those in `path`; "" none */
 	DIATOM_MSG_DISC,       /* ChaOS: report the discs, and which is in */
-	DIATOM_MSG_SETDISC,    /* ChaOS: put disc `index` in, from 0 */
+	DIATOM_MSG_SETDISC,
+	DIATOM_MSG_SETSTICKDPAD, /* ChaOS: the left stick as the d-pad too, `on` = 1 | 0 */    /* ChaOS: put disc `index` in, from 0 */
 	/* The launcher went away - or was displaced by a newer one, which means
 	 * the same thing. The game keeps running. */
 	DIATOM_MSG_HANGUP

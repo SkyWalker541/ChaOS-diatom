@@ -504,6 +504,13 @@ void diatom_port_input_poll(void)
 
 uint32_t diatom_port_input_state(void) { return g_buttons; }
 
+/* ChaOS: no sticks here */
+bool diatom_port_input_axes(int16_t out[4])
+{
+	out[0] = out[1] = out[2] = out[3] = 0;
+	return false;
+}
+
 /* Nothing queues here: the poll reads the keyboard as it is now. */
 void     diatom_port_input_reset(void) { }
 
