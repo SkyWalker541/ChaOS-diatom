@@ -817,6 +817,9 @@ static void idle_note_input(bool any)
  * exit summary's figure for stretch, 6.6 to 7.0 ms, rounded up. */
 #define FAST_PRESENT_GUESS_US 7000.0
 static int  g_speed = 1;
+/* ChaOS: at 1x, a frame left undrawn when the game falls behind (see the
+ * loop), so its sound never runs short. On unless the launcher says not. */
+static bool g_catchup = true;
 
 /* A Super Game Boy's clock is the SNES's, 2.4% faster than a Game Boy's, and
  * mGBA, running an SGB-flagged game as one (in the GBC folder, where the model
@@ -1487,6 +1490,7 @@ static int run_session_inner(const diatom_session *sn)
 	audio_forget();
 	diatom_levels_invalidate();
 	long frames = 0, geom_changes = 0, resyncs = 0;
+	long caught_up = 0;   /* ChaOS: turns that ran a frame undrawn to catch up */
 	size_t q_min = (size_t)-1, q_max = 0;
 	bool stop = false;
 
@@ -1771,7 +1775,25 @@ static int run_session_inner(const diatom_session *sn)
 		 * what presenting costs, whichever comes first. The present cost is the
 		 * running average, so a cheaper display mode buys speed by itself. */
 		const bool fast = g_speed > 1;
-		const int periods = fast ? 2 : 1;
+		/* ChaOS: catching up at 1x. A frame that ran long - a heavy scene, a
+		 * shader, a save for rewind - leaves the game behind its clock, and
+		 * behind, the sound it makes runs short and the speaker crackles.
+		 * When it is more than three quarters of a frame behind, this turn
+		 * runs two frames and draws only the second: the game still runs
+		 * every frame, at its own rate, and every sound is made; what is
+		 * saved is drawing one and the shader and present - most of a frame.
+		 * Never two turns running, so at worst every other picture is shown.
+		 * Not while rewinding, which has its own pace. */
+		static bool caught_up_last;
+		const uint32_t rw_keys = DIATOM_BIT(DIATOM_BTN_MENU) | DIATOM_BIT(DIATOM_BTN_L1);
+		const bool catchup = !fast && !caught_up_last && g_catchup &&
+		                     !(rewind_on() && (diatom_port_input_state() & rw_keys) == rw_keys) &&
+		                     (double)diatom_port_now_us() - next_us > frame_us * 0.75 &&
+		                     !(sn->limit > 0 && frames + 2 > sn->limit);
+		const int periods = fast || catchup ? 2 : 1;
+
+		caught_up_last = catchup;
+		if (catchup) caught_up++;
 		/* Fast, at the top clock; see diatom_port_fast_clock. */
 		diatom_port_fast_clock(fast);
 		const uint64_t batch_t0 = diatom_port_now_us();
@@ -1830,6 +1852,7 @@ static int run_session_inner(const diatom_session *sn)
 			if (skips && ran + 1 < periods * g_speed &&
 			    !(sn->limit > 0 && frames + 1 >= sn->limit))
 				shown = (double)(s0 - batch_t0) + unshown_us + shown_us > budget;
+			if (catchup) shown = ran > 0;   /* ChaOS: the first of the two isn't drawn */
 			diatom_env_frame_shown(shown);
 
 			g_core->run();
@@ -1859,6 +1882,9 @@ static int run_session_inner(const diatom_session *sn)
 			} else {
 				double spent;
 
+				/* ChaOS: a catch-up turn always runs both, so the frame left
+				 * on the panel is one the core drew */
+				if (catchup) { if (ran >= 2) break; continue; }
 				if (!fast || ran >= periods * g_speed) break;
 				if (sn->limit > 0 && frames >= sn->limit) break;
 				spent = (double)(diatom_port_now_us() - batch_t0);
@@ -2249,6 +2275,7 @@ static int run_session_inner(const diatom_session *sn)
 		printf("diatom: %ld geometry change(s), last rect %dx%d at %d,%d\n",
 		       geom_changes, g_dst.w, g_dst.h, g_dst.x, g_dst.y);
 		printf("diatom: %ld resync(s)\n", resyncs);
+		printf("diatom: %ld frame(s) not drawn to keep up\n", caught_up);
 		if (g_present_frames)
 			printf("diatom: present avg %.2f ms over %ld frames\n",
 			       (double)g_present_us / (double)g_present_frames / 1000.0,

@@ -119,7 +119,10 @@ static void *writer(void *arg)
 		g_pending = false;
 		pthread_mutex_unlock(&g_mx);
 
-		write_atomic(g_sram_path, g_staging, g_sram_size);
+		/* ChaOS: each write in the log - at most one a second, and only when
+		 * the game changed its save - so a save that seems lost can be traced */
+		if (write_atomic(g_sram_path, g_staging, g_sram_size))
+			logf_(DIATOM_LOG_INFO, "save: wrote %zu bytes to %s", g_sram_size, g_sram_path);
 
 		pthread_mutex_lock(&g_mx);
 	}
@@ -176,6 +179,8 @@ bool diatom_save_init(diatom_core *c, const char *save_dir, const char *rom_path
 			logf_(DIATOM_LOG_INFO, "save: loaded %zu bytes from %s",
 			      got, g_sram_path);
 		fclose(f);
+	} else {
+		logf_(DIATOM_LOG_INFO, "save: none yet at %s; starting blank", g_sram_path);
 	}
 
 	g_shadow  = malloc(g_sram_size);
