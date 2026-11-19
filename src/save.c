@@ -283,6 +283,21 @@ bool diatom_state_save(diatom_core *c, const char *path)
 	memcpy(buf, &h, sizeof h);
 
 	ok = write_atomic(path, buf, sizeof h + n);
+	/* ChaOS: which disc was in, beside the state, so a resume starts on it
+	 * (diatom_env_disc_initial). Gone for a game on one disc. */
+	if (ok) {
+		char dp[PATH_MAX];
+		int di = diatom_env_disc_count() > 1 ? diatom_env_disc_index() : -1;
+
+		snprintf(dp, sizeof dp, "%s.disc", path);
+		if (di > 0) {
+			FILE *df = fopen(dp, "w");
+
+			if (df) { fprintf(df, "%d\n", di); fclose(df); }
+		} else {
+			remove(dp);
+		}
+	}
 	free(buf);
 	if (ok) logf_(DIATOM_LOG_INFO, "state: wrote %zu bytes to %s", n, path);
 	return ok;
@@ -336,6 +351,22 @@ static bool version_twins(const char *have, const char *want)
 			return true;
 	}
 	return false;
+}
+
+/* ChaOS: the disc a state was saved with, from 0; -1 when it says none. */
+int diatom_state_disc(const char *path)
+{
+	char dp[PATH_MAX];
+	FILE *f;
+	int di = -1;
+
+	if (!path) return -1;
+	snprintf(dp, sizeof dp, "%s.disc", path);
+	if ((f = fopen(dp, "r"))) {
+		if (fscanf(f, "%d", &di) != 1) di = -1;
+		fclose(f);
+	}
+	return di;
 }
 
 bool diatom_state_load(diatom_core *c, const char *path)

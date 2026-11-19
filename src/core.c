@@ -306,6 +306,7 @@ bool diatom_core_start(diatom_core *c, const char *rom_path)
 		gi.size = len;
 	}
 
+	diatom_env_disc_initial(rom_path);   /* ChaOS: a state's disc, first */
 	ok = c->load_game(&gi);
 
 	/* The core has copied whatever it needs by now; libretro does not promise

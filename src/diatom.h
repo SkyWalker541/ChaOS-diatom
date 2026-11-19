@@ -126,6 +126,12 @@ int  diatom_env_disc_count(void);
 int  diatom_env_disc_index(void);
 bool diatom_env_disc_label(int i, char *out, size_t n);
 bool diatom_env_disc_set(int i);
+/* ChaOS: waits until the lid a disc change closed reads closed (before a
+ * reset); want names the disc a state about to be loaded was saved with, and
+ * initial hands it to the core before retro_load_game. */
+void diatom_env_disc_settle(void);
+void diatom_env_disc_want(int index);
+void diatom_env_disc_initial(const char *rom_path);
 /* ChaOS: the core's pad with sticks for port 0 (its DualShock) on a device
  * with sticks, else 0 for its ordinary pad. Asked once a game is loaded; it
  * also starts the game's "reads an axis" afresh. */
@@ -301,6 +307,7 @@ void diatom_save_tick(void);       /* once per frame; may schedule a write */
 void diatom_save_flush(void);      /* synchronous; exit and signal paths */
 void diatom_save_shutdown(void);
 bool diatom_state_save(diatom_core *c, const char *path);
+int  diatom_state_disc(const char *path);   /* ChaOS: its disc, from 0, or -1 */
 bool diatom_state_load(diatom_core *c, const char *path);
 
 /* scale.c - geometry is arithmetic and lives here, once, so every port agrees.
