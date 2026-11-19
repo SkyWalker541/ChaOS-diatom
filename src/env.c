@@ -12,6 +12,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <limits.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "cheevos.h"
 #include "cheats.h"
@@ -190,6 +194,15 @@ static void core_log(enum retro_log_level level, const char *fmt, ...)
  * asks for it with DISC and changes it with SETDISC. */
 static struct retro_disk_control_ext_callback g_disk;
 static bool g_disk_set;
+static long long g_disc_closed_ms;   /* when a disc last went in, for settle */
+
+static long long now_ms(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
 
 int diatom_env_disc_count(void)
 {
@@ -222,7 +235,68 @@ bool diatom_env_disc_set(int i)
 		g_disk.set_eject_state(false);
 		return false;
 	}
-	return g_disk.set_eject_state(false);
+	if (!g_disk.set_eject_state(false)) return false;
+	g_disc_closed_ms = now_ms();
+	return true;
+}
+
+/* ChaOS: a closed tray isn't closed at once. PCSX ReARMed reports the lid
+ * open for up to 2 seconds of wall-clock time after it closes, as a real
+ * drive spins up; a console reset inside that window boots with the lid
+ * open, and the BIOS goes to its CD player and memory card screen instead of
+ * the game (Restart With This Disc, 2.6.1). A reset waits it out. */
+void diatom_env_disc_settle(void)
+{
+	long long left;
+
+	if (!g_disc_closed_ms) return;
+	left = 3000 - (now_ms() - g_disc_closed_ms);
+	if (left > 0) usleep((useconds_t)left * 1000);
+	g_disc_closed_ms = 0;
+}
+
+/* ChaOS: the disc a state was saved with, put in before the game loads.
+ * Loading a disc-2 state into a game started on disc 1 makes the core change
+ * discs as it restores, which opens the lid for 2 seconds just as the game
+ * wakes: games hang on it, black (2.6.1). Told before retro_load_game, the
+ * core starts on that disc, and the restore has nothing to change. The path
+ * has to be the core's own for that disc, built as PCSX ReARMed builds it
+ * from the .m3u: the entry as written when it is absolute, else beside the
+ * playlist. */
+static int g_disc_want = -1;
+
+void diatom_env_disc_want(int index) { g_disc_want = index; }
+
+void diatom_env_disc_initial(const char *rom_path)
+{
+	char line[1024], path[PATH_MAX], dir[PATH_MAX], *slash;
+	const char *ext;
+	FILE *f;
+	int k = 0, want = g_disc_want;
+
+	g_disc_want = -1;
+	if (want <= 0 || !rom_path || !g_disk_set || !g_disk.set_initial_image) return;
+	ext = strrchr(rom_path, '.');
+	if (!ext || strcasecmp(ext, ".m3u")) return;
+	snprintf(dir, sizeof dir, "%s", rom_path);
+	slash = strrchr(dir, '/');
+	if (slash) *slash = '\0'; else snprintf(dir, sizeof dir, ".");
+	if (!(f = fopen(rom_path, "r"))) return;
+	while (fgets(line, sizeof line, f)) {
+		if (line[0] == '#') continue;
+		line[strcspn(line, "\r\n")] = '\0';
+		if (!line[0]) continue;
+		if (k++ != want) continue;
+		if (line[0] == '/' || line[0] == '\\' ||
+		    (line[1] == ':' && (line[2] == '/' || line[2] == '\\')))
+			snprintf(path, sizeof path, "%s", line);
+		else
+			snprintf(path, sizeof path, "%s/%s", dir, line);
+		if (g_disk.set_initial_image((unsigned)want, path))
+			printf("diatom: starting on disc %d for the state\n", want + 1);
+		break;
+	}
+	fclose(f);
 }
 
 static bool env_cb(unsigned cmd, void *data)

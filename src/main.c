@@ -960,6 +960,7 @@ static bool menu_pause(const diatom_session *sn)
 		case DIATOM_MSG_RESET:
 			/* The menu's Reset row. The game stays paused - the launcher
 			 * still owns the display and sends RESUME when it is done. */
+			diatom_env_disc_settle();   /* ChaOS: a lid just closed reads closed first */
 			g_core->reset();
 			rewind_reset();
 			/* Same reason as a state load, one step further: the game is
@@ -1550,6 +1551,8 @@ static int run_session_inner(const diatom_session *sn)
 	diatom_cheevos_set_console((unsigned)sn->console);
 
 	diatom_shading_prepare(sn->core, sn->rom);
+	/* ChaOS: the disc the state to resume was saved with goes in first */
+	diatom_env_disc_want(sn->state_load ? diatom_state_disc(sn->state_load) : -1);
 	if (!diatom_core_start(g_core, sn->rom)) {
 		/* Say the firmware was found, so a launcher that reports this does not
 		 * send someone hunting for a BIOS they already have. */
@@ -1966,7 +1969,8 @@ static int run_session_inner(const diatom_session *sn)
 				                  : "ERROR\tcode=state_rejected\tmsg=%s", m.path);
 				break;
 			case DIATOM_MSG_RESET:
-				g_core->reset();
+				diatom_env_disc_settle();   /* ChaOS: a lid just closed reads closed first */
+			g_core->reset();
 				rewind_reset();
 				/* Same reason as a state load, one step further: the game
 				 * is back at the title screen and nothing in progress
