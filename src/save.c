@@ -57,6 +57,15 @@ static uint8_t    *g_staging;     /* the writer's private copy */
 static size_t      g_sram_size;
 static uint64_t    g_last_write;
 
+/* ChaOS: what the card held, so the game's save is never lost to a write.
+ * g_known is the file as this session last saw it (loaded or written); a file
+ * that differs from it was changed by something else while the game ran - a
+ * save copied in over ChaOS Transfer, say - and the game, which never saw that
+ * copy, would otherwise write straight over it. Kept as .outside instead. The
+ * first write of a session keeps the copy it replaces as .bak. */
+static struct stat g_known;
+static bool        g_known_ok, g_backed_up;
+
 static pthread_t       g_writer;
 static pthread_mutex_t g_mx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_cv = PTHREAD_COND_INITIALIZER;
@@ -109,6 +118,59 @@ static bool write_atomic(const char *path, const void *data, size_t n)
 	return true;
 }
 
+static bool copy_file(const char *from, const char *to)
+{
+	FILE *f = fopen(from, "rb");
+	uint8_t *buf;
+	long n;
+	bool ok = false;
+
+	if (!f) return false;
+	if (fseek(f, 0, SEEK_END) == 0 && (n = ftell(f)) > 0 && n <= 64L * 1024 * 1024 &&
+	    fseek(f, 0, SEEK_SET) == 0 && (buf = malloc((size_t)n))) {
+		if (fread(buf, 1, (size_t)n, f) == (size_t)n) ok = write_atomic(to, buf, (size_t)n);
+		free(buf);
+	}
+	fclose(f);
+	return ok;
+}
+
+static bool same_file(const struct stat *a, const struct stat *b)
+{
+	return a->st_size == b->st_size && a->st_mtim.tv_sec == b->st_mtim.tv_sec &&
+	       a->st_mtim.tv_nsec == b->st_mtim.tv_nsec;
+}
+
+/* Before each write of the game's save: what is on the card now, kept if it
+ * is not what this session last wrote or loaded. */
+static void keep_before_write(void)
+{
+	char keep[1100];
+	struct stat st;
+
+	if (stat(g_sram_path, &st) != 0) return;
+	if (!g_known_ok || !same_file(&st, &g_known)) {
+		snprintf(keep, sizeof keep, "%s.outside", g_sram_path);
+		if (copy_file(g_sram_path, keep))
+			logf_(DIATOM_LOG_WARN, "save: %s changed outside the game while it "
+			      "ran; the game never saw that copy, so it is kept as %s",
+			      g_sram_path, keep);
+		g_backed_up = true;
+		return;
+	}
+	if (!g_backed_up) {
+		snprintf(keep, sizeof keep, "%s.bak", g_sram_path);
+		if (copy_file(g_sram_path, keep))
+			logf_(DIATOM_LOG_INFO, "save: the copy from before this game kept as %s", keep);
+		g_backed_up = true;
+	}
+}
+
+static void note_written(void)
+{
+	g_known_ok = stat(g_sram_path, &g_known) == 0;
+}
+
 static void *writer(void *arg)
 {
 	pthread_mutex_lock(&g_mx);
@@ -119,7 +181,13 @@ static void *writer(void *arg)
 		g_pending = false;
 		pthread_mutex_unlock(&g_mx);
 
-		write_atomic(g_sram_path, g_staging, g_sram_size);
+		/* ChaOS: each write in the log - at most one a second, and only when
+		 * the game changed its save - so a save that seems lost can be traced */
+		keep_before_write();
+		if (write_atomic(g_sram_path, g_staging, g_sram_size)) {
+			note_written();
+			logf_(DIATOM_LOG_INFO, "save: wrote %zu bytes to %s", g_sram_size, g_sram_path);
+		}
 
 		pthread_mutex_lock(&g_mx);
 	}
@@ -161,8 +229,10 @@ bool diatom_save_init(diatom_core *c, const char *save_dir, const char *rom_path
 	snprintf(g_sram_path, sizeof g_sram_path, "%s/%s.srm",
 	         save_dir ? save_dir : ".", name);
 
+	g_known_ok = g_backed_up = false;
 	f = fopen(g_sram_path, "rb");
 	if (f) {
+		g_known_ok = fstat(fileno(f), &g_known) == 0;
 		size_t got = fread(g_sram, 1, g_sram_size, f);
 		fseek(f, 0, SEEK_END);
 		if ((size_t)ftell(f) != g_sram_size)
@@ -176,6 +246,8 @@ bool diatom_save_init(diatom_core *c, const char *save_dir, const char *rom_path
 			logf_(DIATOM_LOG_INFO, "save: loaded %zu bytes from %s",
 			      got, g_sram_path);
 		fclose(f);
+	} else {
+		logf_(DIATOM_LOG_INFO, "save: none yet at %s; starting blank", g_sram_path);
 	}
 
 	g_shadow  = malloc(g_sram_size);
@@ -188,6 +260,12 @@ bool diatom_save_init(diatom_core *c, const char *save_dir, const char *rom_path
 	}
 	memcpy(g_shadow, g_sram, g_sram_size);
 	g_last_write = now_us();
+	/* ChaOS: Diatom stays resident from one game to the next, and the last
+	 * game's shutdown left g_stop set. Not cleared, the writer for this game
+	 * quit on its first look, and every save the game made after that was
+	 * handed to nobody - and, marked handed over, not flushed at exit either.
+	 * The first game after a boot saved; every later one lost its saves. */
+	g_stop = g_pending = false;
 
 	if (pthread_create(&g_writer, NULL, writer, NULL) == 0)
 		g_running = true;
@@ -196,7 +274,7 @@ bool diatom_save_init(diatom_core *c, const char *save_dir, const char *rom_path
 	return true;
 }
 
-void diatom_save_tick(void)
+static void save_tick(bool now)
 {
 	if (!g_sram_size || !g_running) return;
 	/* memcmp of at most 128 KB, tens of microseconds. Cheap enough to do every
@@ -204,7 +282,7 @@ void diatom_save_tick(void)
 	 * this. NES carts are the exception - they use battery RAM as work RAM and
 	 * change it constantly, which is what the interval is really bounding. */
 	if (!memcmp(g_sram, g_shadow, g_sram_size)) return;
-	if (now_us() - g_last_write < WRITE_INTERVAL_US) return;
+	if (!now && now_us() - g_last_write < WRITE_INTERVAL_US) return;
 
 	pthread_mutex_lock(&g_mx);
 	memcpy(g_staging, g_sram, g_sram_size);
@@ -215,6 +293,13 @@ void diatom_save_tick(void)
 	g_last_write = now_us();
 }
 
+void diatom_save_tick(void) { save_tick(false); }
+
+/* ChaOS: on the menu opening and on Reset - a save the game made in the last
+ * second goes to the card now, not when the game next runs a frame. Still the
+ * writer's job, so the frame thread does no I/O and no write races another. */
+void diatom_save_now(void) { save_tick(true); }
+
 void diatom_save_flush(void)
 {
 	if (!g_sram_size) return;
@@ -222,7 +307,9 @@ void diatom_save_flush(void)
 
 	/* Synchronous on purpose. This runs on the exit and signal paths, where a
 	 * stall costs nothing and a missed write costs the player's progress. */
+	keep_before_write();
 	if (write_atomic(g_sram_path, g_sram, g_sram_size)) {
+		note_written();
 		memcpy(g_shadow, g_sram, g_sram_size);
 		logf_(DIATOM_LOG_INFO, "save: flushed %zu bytes to %s",
 		      g_sram_size, g_sram_path);
