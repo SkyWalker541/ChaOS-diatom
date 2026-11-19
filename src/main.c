@@ -964,6 +964,7 @@ static bool menu_pause(const diatom_session *sn)
 		case DIATOM_MSG_RESET:
 			/* The menu's Reset row. The game stays paused - the launcher
 			 * still owns the display and sends RESUME when it is done. */
+			diatom_save_now();          /* ChaOS: the game's save first */
 			diatom_env_disc_settle();   /* ChaOS: a lid just closed reads closed first */
 			g_core->reset();
 			rewind_reset();
@@ -1979,7 +1980,7 @@ static int run_session_inner(const diatom_session *sn)
 			/* Consumed at the top of the next frame, beside the MENU press it
 			 * stands in for - not here, because the menu takes the display and
 			 * this is the middle of a frame that has already been presented. */
-			case DIATOM_MSG_PAUSE: g_pause_requested = true; break;
+			case DIATOM_MSG_PAUSE: g_pause_requested = true; diatom_save_now(); break;
 			case DIATOM_MSG_SETIDLE:
 				g_idle_after_ms = (unsigned)(m.count > 0 ? m.count : 0);
 				g_idle_since_us = diatom_port_now_us();
@@ -2006,8 +2007,9 @@ static int run_session_inner(const diatom_session *sn)
 				                  : "ERROR\tcode=state_rejected\tmsg=%s", m.path);
 				break;
 			case DIATOM_MSG_RESET:
+				diatom_save_now();          /* ChaOS: the game's save first */
 				diatom_env_disc_settle();   /* ChaOS: a lid just closed reads closed first */
-			g_core->reset();
+				g_core->reset();
 				rewind_reset();
 				/* Same reason as a state load, one step further: the game
 				 * is back at the title screen and nothing in progress
