@@ -1,6 +1,8 @@
 /* Rewind (ChaOS). See rewind.h. */
 #include "rewind.h"
 
+#include <pthread.h>
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,8 +22,11 @@ static uint8_t *g_ring;
 static size_t   g_head, g_tail, g_used;
 static unsigned g_entries;
 
+static void rewind_idle(void);
+
 void rewind_set(bool on)
 {
+	rewind_idle();
 	g_on = on;
 	if (!on) {
 		free(g_ring); free(g_cur); free(g_tmp);
@@ -36,6 +41,7 @@ bool rewind_on(void) { return g_on; }
 
 void rewind_reset(void)
 {
+	rewind_idle();
 	g_head = g_tail = g_used = 0;
 	g_entries = 0;
 	g_count = 0;
@@ -86,6 +92,18 @@ static size_t encode(const uint8_t *a, const uint8_t *b, size_t n, uint8_t *out)
 
 	while (i < n) {
 		size_t z = 0, l = 0, s;
+		/* ChaOS: the unchanged stretch, eight bytes at a time while it lasts:
+		 * most of a state is the same from one save to the next, and the
+		 * byte loop over half a megabyte of mGBA's cost a frame its audio */
+		for (;;) {
+			uint64_t wa, wb;
+
+			if (i + z + 8 > n || z + 8 > 65535) break;
+			memcpy(&wa, a + i + z, 8);
+			memcpy(&wb, b + i + z, 8);
+			if (wa != wb) break;
+			z += 8;
+		}
 		while (i + z < n && z < 65535 && a[i + z] == b[i + z]) z++;
 		i += z;
 		s = i;
@@ -137,24 +155,23 @@ static bool buffers(size_t size)
 	return true;
 }
 
-void rewind_after_frame(diatom_core *c)
+/* ChaOS: the coding of a save into the ring, off the game's thread. Taking
+ * the state (serialize) stays with the game, which owns the core; comparing it
+ * with the last and filing the difference runs on another core of the CPU
+ * while the next frames play. Everything here waits for it first (rewind_idle),
+ * so the ring and the two states are only ever touched by one side. */
+static pthread_t       g_worker;
+static bool            g_worker_up, g_job;
+static pthread_mutex_t g_wmx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_wcv = PTHREAD_COND_INITIALIZER;
+
+static void file_save(void)
 {
-	size_t size, len;
+	size_t len;
 	uint32_t l32;
 
-	if (!g_on || !c || !c->serialize_size || !c->serialize) return;
-	if (++g_count < REWIND_EVERY) return;
-	g_count = 0;
-	size = c->serialize_size();
-	if (!size || !buffers(size)) return;
-	if (!c->serialize(g_tmp, size)) return;
-	if (!g_have) {
-		memcpy(g_cur, g_tmp, size);
-		g_have = true;
-		return;
-	}
 	/* The entry is what turns the new state back into the one before */
-	len = encode(g_cur, g_tmp, size, g_code);
+	len = encode(g_cur, g_tmp, g_size, g_code);
 	if (len + 8 > REWIND_BUDGET / 2) return;         /* a state too unlike to keep */
 	while (g_used + len + 8 > REWIND_BUDGET && g_entries) drop_oldest();
 	l32 = (uint32_t)len;
@@ -166,10 +183,63 @@ void rewind_after_frame(diatom_core *c)
 	{ uint8_t *t = g_cur; g_cur = g_tmp; g_tmp = t; }
 }
 
+static void *worker(void *arg)
+{
+	pthread_mutex_lock(&g_wmx);
+	for (;;) {
+		while (!g_job) pthread_cond_wait(&g_wcv, &g_wmx);
+		pthread_mutex_unlock(&g_wmx);
+		file_save();
+		pthread_mutex_lock(&g_wmx);
+		g_job = false;
+		pthread_cond_broadcast(&g_wcv);
+	}
+	return arg;
+}
+
+/* Until the save being filed is in the ring */
+static void rewind_idle(void)
+{
+	if (!g_worker_up) return;
+	pthread_mutex_lock(&g_wmx);
+	while (g_job) pthread_cond_wait(&g_wcv, &g_wmx);
+	pthread_mutex_unlock(&g_wmx);
+}
+
+void rewind_after_frame(diatom_core *c)
+{
+	size_t size;
+
+	if (!g_on || !c || !c->serialize_size || !c->serialize) return;
+	if (++g_count < REWIND_EVERY) return;
+	/* The last save filed first. Three frames are fifty milliseconds and
+	 * filing takes a few, so in play this never waits; it keeps every save
+	 * exactly where rewind expects it. */
+	rewind_idle();
+	g_count = 0;
+	size = c->serialize_size();
+	if (!size || !buffers(size)) return;
+	if (!c->serialize(g_tmp, size)) return;
+	if (!g_have) {
+		memcpy(g_cur, g_tmp, size);
+		g_have = true;
+		return;
+	}
+	if (!g_worker_up)
+		g_worker_up = pthread_create(&g_worker, NULL, worker, NULL) == 0;
+	if (!g_worker_up) { file_save(); return; }   /* no thread: as before */
+	pthread_mutex_lock(&g_wmx);
+	g_job = true;
+	pthread_cond_signal(&g_wcv);
+	pthread_mutex_unlock(&g_wmx);
+}
+
 bool rewind_step(diatom_core *c)
 {
 	uint32_t len;
 	size_t end, start;
+
+	rewind_idle();
 
 	if (!g_on || !g_have || !g_entries || !c || !c->unserialize) return false;
 	/* The newest entry ends at head */

@@ -177,7 +177,7 @@ check-cheats:
 
 check-rewind:
 	@mkdir -p $(BUILD)
-	$(CC) -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc -o $(BUILD)/rewind_test test/rewind_test.c src/rewind.c
+	$(CC) -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc -o $(BUILD)/rewind_test test/rewind_test.c src/rewind.c -lpthread
 	@$(BUILD)/rewind_test
 
 # Does a RetroAchievements address reach the byte it names? Offline, needs no
