@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "cheevos.h"
+#include "logstamp.h"
 #include "diatom.h"
 #include "levels.h"
 #include "shading.h"
@@ -2313,6 +2314,8 @@ static int run_session(const diatom_session *sn)
 
 int main(int argc, char **argv)
 {
+	/* ChaOS: a time on every line it writes to chaos.log (logstamp.h) */
+	logstamp_install();
 	const char *core_path = NULL, *rom_path = NULL, *shot_path = NULL;
 	/* Stretch by default, judged on the panel. A handheld's screen
 	 * is its whole interface, and full use of it beat both the letterbox and
