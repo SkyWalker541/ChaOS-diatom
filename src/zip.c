@@ -20,21 +20,34 @@
 #include <zlib.h>
 
 #include "diatom.h"
+#include "../lib/7z/sevenz.h"
 
 static uint16_t rd16(const unsigned char *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 static uint32_t rd32(const unsigned char *p)
 { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
 
+/* ChaOS: a .7z is taken the same way - its largest file, read whole - by
+ * 7-Zip's own C decoder (lib/7z, public domain). */
 bool diatom_zip_is(const char *path)
 {
 	size_t n = path ? strlen(path) : 0;
-	return n > 4 && strcasecmp(path + n - 4, ".zip") == 0;
+	return (n > 4 && strcasecmp(path + n - 4, ".zip") == 0) || sevenz_is(path);
 }
 
 /* Largest entry in the archive, extracted whole. */
 bool diatom_zip_load(const char *path, void **out, size_t *out_len,
                      char *name, size_t name_n)
 {
+	if (sevenz_is(path)) {
+		unsigned char *d = NULL;
+
+		if (!sevenz_largest(path, 0, &d, out_len, name, name_n)) {
+			fprintf(stderr, "diatom: 7z: couldn't read a game in %s\n", path);
+			return false;
+		}
+		*out = d;
+		return true;
+	}
 	FILE *f = fopen(path, "rb");
 	unsigned char tail[66000 + 22], hdr[46], lh[30];
 	long fsize, tail_off;

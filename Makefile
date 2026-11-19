@@ -34,6 +34,8 @@ SRC   := src/main.c src/rewind.c src/cheats.c src/cheevos.c src/core.c src/env.c
 SRC   += src/shading.c port/shade.c shaders/pt/pt_shader.c
 SRC   += shaders/cpu_shader.c shaders/crt/crts.c shaders/lcd/lcd3x.c shaders/scan/scanlines.c
 OBJ   := $(SRC:%.c=$(BUILD)/%.o)
+# ChaOS: 7-Zip's C decoder, for .7z games (lib/7z), someone else's C built quietly
+OBJ   += $(BUILD)/lib/7z/chaos_7z.o
 BIN   := $(BUILD)/diatom
 CONFORM := $(BUILD)/diatom-conform
 
@@ -137,6 +139,10 @@ $(BIN): $(OBJ) $(RC_OBJ)
 	@mkdir -p $(BUILD)
 	$(CC) -o $@ $(OBJ) $(RC_OBJ) $(LDFLAGS)
 
+$(BUILD)/lib/7z/chaos_7z.o: lib/7z/chaos_7z.c lib/7z/sevenz.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -w -c -o $@ $<
+
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -146,7 +152,7 @@ $(BUILD)/%.o: %.c
 # backend exists. Cheap to check, so check it.
 # Mechanical checks, each guarding a rule that decays the moment nothing fails
 # when it is broken: check-seam has held since day one for exactly that reason.
-check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats
+check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip
 
 # The checks that run without SDL, built with AddressSanitizer and
 # UndefinedBehaviorSanitizer into build/asan, so an overrun, a use after free
@@ -174,6 +180,12 @@ check-cheats:
 	@mkdir -p $(BUILD)
 	$(CC) -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc -o $(BUILD)/cheats_test test/cheats_test.c src/cheats.c
 	@$(BUILD)/cheats_test
+
+# ChaOS: a game in a .zip or a .7z, opened as at the start of a game
+check-zip:
+	@mkdir -p $(BUILD)
+	$(CC) -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc -o $(BUILD)/zip_test test/zip_test.c src/zip.c lib/7z/chaos_7z.c -lz -w
+	@$(BUILD)/zip_test
 
 check-rewind:
 	@mkdir -p $(BUILD)
