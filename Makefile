@@ -152,7 +152,7 @@ $(BUILD)/%.o: %.c
 # backend exists. Cheap to check, so check it.
 # Mechanical checks, each guarding a rule that decays the moment nothing fails
 # when it is broken: check-seam has held since day one for exactly that reason.
-check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save
+check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift
 
 # The checks that run without SDL, built with AddressSanitizer and
 # UndefinedBehaviorSanitizer into build/asan, so an overrun, a use after free
@@ -186,6 +186,12 @@ check-zip:
 	@mkdir -p $(BUILD)
 	$(CC) -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc -o $(BUILD)/zip_test test/zip_test.c src/zip.c lib/7z/chaos_7z.c -lz -w
 	@$(BUILD)/zip_test
+
+# ChaOS: PT's drifting light, swapped in whole every 4 frames
+check-ptdrift:
+	@mkdir -p $(BUILD)
+	$(CC) -std=gnu11 -Wall -Wextra -O3 -fno-trapping-math -fno-math-errno -ffp-contract=off -Ishaders/pt -o $(BUILD)/pt_drift_test test/pt_drift_test.c shaders/pt/pt_shader.c -lm
+	@$(BUILD)/pt_drift_test
 
 # ChaOS: the game's battery save, game after game in one resident process
 check-save:

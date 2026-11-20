@@ -161,6 +161,33 @@ struct pt_ctx {
 	float     light[3];          /* this frame's light */
 	int       glare_ok;          /* rows are for the current settings */
 
+	/* ChaOS: what makes a moving light (Light Drift) cheap enough to redo
+	 * every frame. The squared distance to the light is a column's part
+	 * plus a row's, so the column's is worked out once a frame (gax); the
+	 * sheen is a function of one phase, so its three colors come from a
+	 * table of it (sheen_lut) made when the settings change; and the ripple
+	 * never moves, so it is kept per pixel (rip) once worked out. */
+	float    *gax;               /* ow: ((gx - light x) * aspect)^2, for `light` */
+	float     gax_light[2];      /* the light gax is for */
+
+	/* ChaOS: a drifting light, without its cost each frame and without a
+	 * seam. The picture drawn always has one light, `light`, whole: the next
+	 * one is built behind it (bglr...), a quarter of the rows a frame, each
+	 * band its own rows of that quarter, and swapped in whole once all four
+	 * quarters are done. So the light moves in steps of four frames, at a
+	 * quarter of the cost, and never tears. */
+	int16_t  *bglr, *bglg, *bglb;
+	uint16_t *bglk;
+	float    *bgax;              /* ow: gax for blight */
+	float     blight[3];         /* the light being built behind */
+	int       drift;             /* the light moves: build behind */
+	unsigned  gcount;            /* frames begun, for the quarters */
+	int       bphase;            /* this frame's quarter: rows with y % DRIFT_STEP == it */
+	int       bdone;             /* quarters built for blight, as bits */
+	int16_t  *sheen_lut;         /* SHEEN_LUT * 3: r, g, b in 8.8 */
+	float    *rip;               /* ow * oh: the ripple's phase, when there is one */
+	uint8_t  *rip_ok;            /* oh: rip's row is worked out */
+
 	/* per frame */
 	pt_src   *src;
 	size_t    src_cap;
@@ -232,6 +259,8 @@ static void free_tables(pt_ctx *c)
 		(void **)&c->gridx, (void **)&c->gridy, (void **)&c->bezx, (void **)&c->bezy,
 		(void **)&c->bezcol, (void **)&c->glr, (void **)&c->glg, (void **)&c->glb,
 		(void **)&c->glk, (void **)&c->rowlight, (void **)&c->xs, (void **)&c->ys,
+		(void **)&c->gax, (void **)&c->rip, (void **)&c->rip_ok, (void **)&c->sheen_lut,
+		(void **)&c->bglr, (void **)&c->bglg, (void **)&c->bglb, (void **)&c->bglk, (void **)&c->bgax,
 	};
 	size_t i;
 	for (i = 0; i < sizeof p / sizeof p[0]; i++) { free(*p[i]); *p[i] = NULL; }
@@ -327,11 +356,150 @@ static void build_settings(pt_ctx *c)
 	c->dirty = 0;
 }
 
+/* ChaOS: the sheen's three colors at a phase, as glare_row_exact works them
+ * out, at SHEEN_LUT steps of it: within a hundredth of a level of the exact
+ * value at any sheen strength. */
+#define SHEEN_LUT 8192
+
+static void sheen_table(pt_ctx *c)
+{
+	const float *P = c->p.v;
+	const float sheen = P[PT_SHEEN_STRENGTH] > 0.001f ? P[PT_SHEEN_STRENGTH] : 0.0f;
+	int i;
+
+	for (i = 0; i < SHEEN_LUT; i++) {
+		float ph = ((float)i + 0.5f) / (float)SHEEN_LUT;
+		float h0 = fractf(ph + 0.0f), h1 = fractf(ph + 0.3333f), h2 = fractf(ph + 0.6667f);
+		float w0 = fabsf(h0 * 2.0f - 1.0f), w1 = fabsf(h1 * 2.0f - 1.0f), w2 = fabsf(h2 * 2.0f - 1.0f);
+		float r0 = w0 * w0 * (3.0f - 2.0f * w0);
+		float r1 = w1 * w1 * (3.0f - 2.0f * w1);
+		float r2 = w2 * w2 * (3.0f - 2.0f * w2);
+		float avg = r0 * 0.3333f + r1 * 0.3333f + r2 * 0.3333f, v;
+
+		v = (r0 - avg) * sheen * (float)ONE; c->sheen_lut[i * 3 + 0] = (int16_t)(v + (v < 0.0f ? -0.5f : 0.5f));
+		v = (r1 - avg) * sheen * (float)ONE; c->sheen_lut[i * 3 + 1] = (int16_t)(v + (v < 0.0f ? -0.5f : 0.5f));
+		v = (r2 - avg) * sheen * (float)ONE; c->sheen_lut[i * 3 + 2] = (int16_t)(v + (v < 0.0f ? -0.5f : 0.5f));
+	}
+}
+
+/* The ripple's share of the phase at each pixel of row Y: it depends on the
+ * position alone, so once worked out it is kept until the settings change. */
+static void ripple_row(const pt_ctx *c, int Y)
+{
+	const float *P = c->p.v;
+	const int ow = c->ow;
+	const float ripple = P[PT_SHEEN_RIPPLE] > 0.001f ? P[PT_SHEEN_RIPPLE] : 0.0f;
+	const float rf = 3.0f / P[PT_SHEEN_RIPPLE_SIZE];
+	const float gy = pt_tex0(Y, c->oh);
+	float *restrict rp = c->rip + (size_t)Y * ow;
+	int X;
+
+	for (X = 0; X < ow; X++) {
+		float gx = ((float)X + 0.5f) / (float)ow;
+		float ux = gx * rf, uy = gy * rf;
+		float t0 = fabsf(fractf(ux * 1.00f + uy * 0.37f) * 2.0f - 1.0f);
+		float t1 = fabsf(fractf(uy * 1.13f - ux * 0.61f + 0.31f) * 2.0f - 1.0f);
+		float t2 = fabsf(fractf(ux * 0.43f - uy * 1.71f + 0.72f) * 2.0f - 1.0f);
+
+		t0 = t0 * t0 * (3.0f - 2.0f * t0);
+		t1 = t1 * t1 * (3.0f - 2.0f * t1);
+		t2 = t2 * t2 * (3.0f - 2.0f * t2);
+		rp[X] = (t0 + t1 + t2 - 1.5f) * ripple * 0.45f;
+	}
+}
+
+#define DRIFT_STEP 4
+
+/* Glare and sheen for one screen row, as glare_row_exact below gives it
+ * (within a hundredth of a level), at a fraction of its cost: what this frame
+ * needs is a square root, a division and a table look-up a pixel. For the
+ * light `light`, whose column parts are `ax`, into the tables given. */
+static void glare_row_to(const pt_ctx *c, int Y, const float light[3], const float *ax_,
+                         int16_t *gr_, int16_t *gg_, int16_t *gb_, uint16_t *gk_)
+{
+	const float *P = c->p.v;
+	const int ow = c->ow;
+	const float L1 = light[1], L2 = light[2];
+	const float gy = pt_tex0(Y, c->oh);
+	const float dens = P[PT_SHEEN_BAND_DENSITY];
+	const float gs = P[PT_GLARE_STRENGTH] > 0.001f ? P[PT_GLARE_STRENGTH] : 0.0f;
+	const float sp2 = P[PT_GLARE_SPREAD] * P[PT_GLARE_SPREAD];
+	const float dy = (gy - L1) * 1.0f, dy2 = dy * dy;
+	const float *restrict ax = ax_;
+	const float *restrict rp = c->rip ? c->rip + (size_t)Y * ow : NULL;
+	const int16_t *restrict lut = c->sheen_lut;
+	int16_t *restrict gr = gr_ + (size_t)Y * ow;
+	int16_t *restrict gg = gg_ + (size_t)Y * ow;
+	int16_t *restrict gb = gb_ + (size_t)Y * ow;
+	uint16_t *restrict gk = gk_ + (size_t)Y * ow;
+	int32_t idx[1024];
+	int X, X0;
+
+	if (rp && !c->rip_ok[Y]) {
+		ripple_row(c, Y);
+		((pt_ctx *)c)->rip_ok[Y] = 1;
+	}
+	for (X0 = 0; X0 < ow; X0 += 1024) {
+		int n = ow - X0 < 1024 ? ow - X0 : 1024;
+
+		/* the arithmetic, which vectorizes */
+		for (X = 0; X < n; X++) {
+			float d2 = ax[X0 + X] + dy2;
+			float ph = sqrtf(d2) * dens + L2;
+			float q, gl;
+
+			if (rp) ph += rp[X0 + X];
+			ph = fractf(ph);
+			idx[X] = (int32_t)(ph * (float)SHEEN_LUT);
+			q = d2 / sp2;
+			gl = gs / (1.0f + q * q);
+			gl = gl < 0.85f ? gl : 0.85f;
+			gk[X0 + X] = (uint16_t)(gl * (float)W1 + 0.5f);
+		}
+		/* and the look-ups, which don't */
+		for (X = 0; X < n; X++) {
+			int k = idx[X];
+			if (k > SHEEN_LUT - 1) k = SHEEN_LUT - 1;
+			if (k < 0) k = 0;
+			gr[X0 + X] = lut[k * 3 + 0];
+			gg[X0 + X] = lut[k * 3 + 1];
+			gb[X0 + X] = lut[k * 3 + 2];
+		}
+	}
+}
+
+static void glare_row(const pt_ctx *c, int Y)
+{
+	glare_row_to(c, Y, c->light, c->gax, c->glr, c->glg, c->glb, c->glk);
+}
+
+/* A light's column parts: before the bands, on one thread */
+static void light_columns(const pt_ctx *c, const float light[2], float *ax)
+{
+	const float aspect = (float)c->w / (float)c->h;
+	int X;
+
+	for (X = 0; X < c->ow; X++) {
+		float gx = ((float)X + 0.5f) / (float)c->ow;
+		float dx = (gx - light[0]) * aspect;
+		ax[X] = dx * dx;
+	}
+}
+
+static void glare_columns(pt_ctx *c)
+{
+	if (c->gax_light[0] == c->light[0] && c->gax_light[1] == c->light[1]) return;
+	light_columns(c, c->light, c->gax);
+	c->gax_light[0] = c->light[0];
+	c->gax_light[1] = c->light[1];
+}
+
 /* Glare and sheen for one screen row: pt_glare_at from pt_math.h, written as
  * one loop with no calls and no branches so it vectorizes. A part the shader
  * skips (strength at or under 0.001) is computed with a strength of exactly
- * 0, which gives exactly the 0 the shader's skip gives. */
-static void glare_row(const pt_ctx *c, int Y)
+ * 0, which gives exactly the 0 the shader's skip gives. ChaOS: kept as the
+ * plain statement of what glare_row computes faster; unused. */
+static __attribute__((unused)) void glare_row_exact(const pt_ctx *c, int Y)
 {
 	const float *P = c->p.v;
 	const int ow = c->ow;
@@ -395,10 +563,38 @@ static int glare_alloc(pt_ctx *c)
 		if (!c->glr || !c->glg || !c->glb || !c->glk || !c->rowlight) return -1;
 		c->glare_ok = 0;
 	}
+	/* ChaOS: glare_row's tables */
+	if (!c->gax) c->gax = malloc(sizeof *c->gax * (size_t)c->ow);
+	if (!c->sheen_lut) c->sheen_lut = malloc(sizeof *c->sheen_lut * SHEEN_LUT * 3);
+	if (!c->rip_ok) c->rip_ok = malloc((size_t)c->oh);
+	if (!c->gax || !c->sheen_lut || !c->rip_ok) return -1;
+	if (c->p.v[PT_SHEEN_RIPPLE] > 0.001f && !c->rip) {
+		if (!(c->rip = malloc(sizeof *c->rip * n))) return -1;
+		c->glare_ok = 0;
+	}
 	if (!c->glare_ok) {
 		/* nothing matches NaN: every row is rebuilt */
 		for (y = 0; y < c->oh; y++) c->rowlight[y][0] = c->rowlight[y][1] = c->rowlight[y][2] = NAN;
+		c->gax_light[0] = c->gax_light[1] = NAN;
+		memset(c->rip_ok, 0, (size_t)c->oh);
+		sheen_table(c);
 		c->glare_ok = 1;
+	}
+	if (c->rip && !(c->p.v[PT_SHEEN_RIPPLE] > 0.001f)) { free(c->rip); c->rip = NULL; }
+	glare_columns(c);
+	return 0;
+}
+
+/* ChaOS: the tables the next light is built in, behind the shown ones */
+static int glare_back_alloc(pt_ctx *c)
+{
+	size_t n = (size_t)c->ow * c->oh;
+
+	if (!c->bglr) {
+		c->bglr = malloc(2 * n); c->bglg = malloc(2 * n);
+		c->bglb = malloc(2 * n); c->bglk = malloc(2 * n);
+		c->bgax = malloc(sizeof *c->bgax * (size_t)c->ow);
+		if (!c->bglr || !c->bglg || !c->bglb || !c->bglk || !c->bgax) return -1;
 	}
 	return 0;
 }
@@ -684,8 +880,43 @@ int pt_begin_frame_size(pt_ctx *c, const uint32_t *src, int w, int h, size_t src
 	prepare_source(c, src, src_pitch);
 
 	if (P[PT_GLARE_AND_SHEEN] > 0.5f) {
-		pt_light(P, frame, c->light);
-		if (glare_alloc(c)) return -1;
+		int was_ok = c->glare_ok && c->gax;
+
+		c->drift = P[PT_LIGHT_DRIFT_SPEED] > 0.001f;
+		if (!c->drift) {
+			pt_light(P, frame, c->light);
+			if (glare_alloc(c)) return -1;
+		} else {
+			/* ChaOS: the light drifts. The first frame, or after a
+			 * change of settings or size, builds the whole picture
+			 * for this frame's light; after that the light it
+			 * shows changes only by a swap (DRIFT_STEP above). */
+			if (!was_ok) pt_light(P, frame, c->light);
+			if (glare_alloc(c)) return -1;
+			if (glare_back_alloc(c)) return -1;
+			if (!was_ok) { c->bdone = -1; c->gcount = 0; }
+			if (c->gcount % DRIFT_STEP == 0) {
+				int y;
+				if (c->bdone == (1 << DRIFT_STEP) - 1) {
+					int16_t *t;
+					uint16_t *u;
+					t = c->glr; c->glr = c->bglr; c->bglr = t;
+					t = c->glg; c->glg = c->bglg; c->bglg = t;
+					t = c->glb; c->glb = c->bglb; c->bglb = t;
+					u = c->glk; c->glk = c->bglk; c->bglk = u;
+					memcpy(c->light, c->blight, sizeof c->light);
+					for (y = 0; y < c->oh; y++) memcpy(c->rowlight[y], c->light, sizeof c->light);
+					glare_columns(c);
+				}
+				/* the next light: where it will be when it's shown */
+				pt_light(P, frame + DRIFT_STEP, c->blight);
+				light_columns(c, c->blight, c->bgax);
+				c->bdone = 0;
+			}
+			c->bphase = (int)(c->gcount % DRIFT_STEP);
+			if (c->bdone >= 0) c->bdone |= 1 << c->bphase;
+			c->gcount++;
+		}
 	}
 	c->ready = 1;
 	return 0;
@@ -738,6 +969,10 @@ static int band_rows(const pt_ctx *c, pt_band *b, int y0, int y1,
 				glare_row(c, y);
 				memcpy(c->rowlight[y], c->light, sizeof c->light);
 			}
+		/* ChaOS: and this band's share of the next light's quarter */
+		if (c->drift && c->bdone >= 0)
+			for (y = y0 + ((c->bphase - y0 % DRIFT_STEP + DRIFT_STEP) % DRIFT_STEP); y < y1; y += DRIFT_STEP)
+				glare_row_to(c, y, c->blight, c->bgax, c->bglr, c->bglg, c->bglb, c->bglk);
 	}
 	rows_table[((fx * 3 + gap) * 2 + glare) * 2 + bezel](c, b, y0, y1, dst, dst_pitch, fmt);
 	return 0;
