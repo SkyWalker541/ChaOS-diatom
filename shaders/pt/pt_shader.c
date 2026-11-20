@@ -164,6 +164,15 @@ struct pt_ctx {
 	/* per frame */
 	pt_src   *src;
 	size_t    src_cap;
+
+	/* ChaOS: a game pixel's share depends on nothing but its color and the
+	 * settings, and a frame repeats few colors (a GBA one has 38,400 pixels
+	 * and seldom a few thousand colors), so each is worked out once and kept,
+	 * by color, until the settings change. A direct-mapped table: a color
+	 * that lands on another's slot is worked out again, never wrong. */
+	uint32_t *mkey;        /* MEMO: the color in each slot, MEMO_EMPTY if none */
+	pt_src   *mval;        /* MEMO: its share */
+	int       memo_ok;     /* the slots are for the current settings */
 	int       ready;       /* pt_begin_frame succeeded for the current size */
 
 	pt_band  *own;         /* the band pt_render uses */
@@ -236,6 +245,8 @@ void pt_destroy(pt_ctx *c)
 	free_tables(c);
 	pt_band_destroy(c->own);
 	free(c->src);
+	free(c->mkey);
+	free(c->mval);
 	free(c);
 }
 
@@ -245,6 +256,7 @@ void pt_set_params(pt_ctx *c, const pt_params *p)
 		c->p = *p;
 		c->dirty = 1;
 		c->glare_ok = 0;
+		c->memo_ok = 0;
 	}
 }
 
@@ -393,25 +405,26 @@ static int glare_alloc(pt_ctx *c)
 
 /* ---- per frame: the game pixels -------------------------------------------- */
 
-static void prepare_source(pt_ctx *c, const uint32_t *src, size_t pitch)
+#define MEMO       8192u
+#define MEMO_EMPTY 0xFF000000u   /* no color: a key is the low 24 bits */
+
+/* One color's share, as the shader works it out. */
+static void source_px(const pt_ctx *c, uint32_t px, pt_src *o)
 {
 	const float *P = c->p.v;
 	float th = pt_threshold(P);
 	float tp = P[PT_TRANSPARENT_PIXELS], amt = P[PT_TRANSPARENCY_AMOUNT];
 	float dark = P[PT_DARKEN_PICTURE], shop = P[PT_DROP_SHADOW_OPACITY];
 	float minb = fmaxf(P[PT_MIN_BRIGHTNESS_FOR_DOTS], 0.001f);
-	int x, y;
 
-	for (y = 0; y < c->h; y++)
-		for (x = 0; x < c->w; x++) {
-			uint32_t px = src[(size_t)y * pitch + x];
+	{
+		{
 			float rr = (float)((px >> 16) & 255) / 255.0f;
 			float rg = (float)((px >> 8) & 255) / 255.0f;
 			float rb = (float)(px & 255) / 255.0f;
 			float rawb = pt_bright(rr, rg, rb), pixb = rawb;
 			float r = rr, g = rg, b = rb, alpha;
 			int white = pt_is_white(rr, rg, rb, rawb, th);
-			pt_src *o = &c->src[(size_t)y * c->w + x];
 
 			if (dark > 0.5f) {
 				float k = fmaxf(1.0f - dark * 0.01f * pixb, 0.0f);
@@ -430,6 +443,44 @@ static void prepare_source(pt_ctx *c, const uint32_t *src, size_t pitch)
 			/* mix(bg, bg * 0.2, s) == bg * mix(1, 0.2, s) */
 			o->sm = (uint16_t)q15(mixf(1.0f, 0.2f, white ? 0.0f : (1.0f - rawb) * shop));
 		}
+	}
+}
+
+static void prepare_source(pt_ctx *c, const uint32_t *src, size_t pitch)
+{
+	int x, y;
+
+	if (!c->mkey) {
+		c->mkey = malloc(sizeof *c->mkey * MEMO);
+		c->mval = malloc(sizeof *c->mval * MEMO);
+		if (!c->mkey || !c->mval) { free(c->mkey); free(c->mval); c->mkey = NULL; c->mval = NULL; }
+		c->memo_ok = 0;
+	}
+	if (!c->mkey) {   /* no room for the table: every pixel worked out */
+		for (y = 0; y < c->h; y++)
+			for (x = 0; x < c->w; x++)
+				source_px(c, src[(size_t)y * pitch + x] & 0xFFFFFFu, &c->src[(size_t)y * c->w + x]);
+		return;
+	}
+	if (!c->memo_ok) {
+		for (x = 0; x < (int)MEMO; x++) c->mkey[x] = MEMO_EMPTY;
+		c->memo_ok = 1;
+	}
+	for (y = 0; y < c->h; y++) {
+		const uint32_t *row = src + (size_t)y * pitch;
+		pt_src *o = c->src + (size_t)y * c->w;
+
+		for (x = 0; x < c->w; x++) {
+			uint32_t px = row[x] & 0xFFFFFFu;
+			uint32_t k = ((px * 2654435761u) >> 19) & (MEMO - 1);
+
+			if (c->mkey[k] != px) {
+				source_px(c, px, &c->mval[k]);
+				c->mkey[k] = px;
+			}
+			o[x] = c->mval[k];
+		}
+	}
 }
 
 /* ---- per frame: the screen --------------------------------------------------- */
