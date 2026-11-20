@@ -503,6 +503,22 @@ void diatom_port_input_poll(void)
 	for (i = 0; i < sizeof keymap / sizeof keymap[0]; i++)
 		if (keys[keymap[i].key]) s |= DIATOM_BIT(keymap[i].btn);
 
+	/* ChaOS: for the checks, buttons held by a file: its first line, a
+	 * number, is OR'd in (DIATOM_TEST_BUTTONS names the file). The desktop
+	 * runs with no keyboard under the checks. */
+	{
+		static const char *path;
+		static bool looked;
+		FILE *f;
+
+		if (!looked) { path = getenv("DIATOM_TEST_BUTTONS"); looked = true; }
+		if (path && (f = fopen(path, "r"))) {
+			unsigned long v = 0;
+			if (fscanf(f, "%lu", &v) == 1) s |= (uint32_t)v;
+			fclose(f);
+		}
+	}
+
 	g_buttons = s;
 }
 

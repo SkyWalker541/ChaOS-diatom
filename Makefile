@@ -152,7 +152,7 @@ $(BUILD)/%.o: %.c
 # backend exists. Cheap to check, so check it.
 # Mechanical checks, each guarding a rule that decays the moment nothing fails
 # when it is broken: check-seam has held since day one for exactly that reason.
-check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift
+check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift check-rewind-end
 
 # The checks that run without SDL, built with AddressSanitizer and
 # UndefinedBehaviorSanitizer into build/asan, so an overrun, a use after free
@@ -244,6 +244,10 @@ conform-check: $(BIN)
 # check-stateplane failed on a DISPLAY field added five days earlier, against a
 # binary from the day before that.
 FRESH_IF_BUILT = @if [ -e $(BIN) ]; then $(MAKE) --no-print-directory $(BIN) $(STUB); fi
+
+# ChaOS: rewinding past the oldest save, then letting go (test/rewind_end.py)
+check-rewind-end: $(STUB)
+	@python3 test/rewind_end.py
 
 check-proto:
 	$(FRESH_IF_BUILT)

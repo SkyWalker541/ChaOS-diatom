@@ -1840,12 +1840,27 @@ static int run_session_inner(const diatom_session *sn)
 			else if (rw_turns++ % 60 == 0 && diatom_proto_connected())
 				diatom_proto_send("REWINDING");
 		}
+		/* ChaOS: said in the log when F1 is let go, for the checks
+		 * (test/rewind_end.py) and for a log that shows rewind ended */
+		{
+			static bool was_rewinding;
+			if (was_rewinding && !rewinding)
+				fprintf(stderr, "diatom: rewind: let go, %u save(s) left\n", rewind_depth());
+			was_rewinding = rewinding;
+		}
 		if (rewinding) {
 			g_audio_fast = true;
 			diatom_env_frame_shown(true);
 			if (rewind_step(g_core)) {
 				g_core->run();
 				frames++;
+			} else {
+				/* ChaOS: nothing left to go back to, so no frame runs - and
+				 * the buttons are read from inside a frame (cb_input_poll).
+				 * Read here instead, or F1 stays held as far as this loop
+				 * knows, and the game, MENU and all, never comes back:
+				 * Aquilus, 2026-11-20, rewinding to the start of the ring. */
+				diatom_port_input_poll();
 			}
 			ran = 1;
 		}
