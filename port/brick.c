@@ -1995,6 +1995,9 @@ static const struct { int code; int btn; } keymap[] = {
 	{ BTN_MODE,       DIATOM_BTN_MENU },
 	/* ChaOS: the Brick Pro's sticks pressed in (brick-pad) */
 	{ BTN_TRIGGER_HAPPY1, DIATOM_BTN_L3 }, { BTN_TRIGGER_HAPPY2, DIATOM_BTN_R3 },
+	/* ChaOS: the two front keys, rewind and fast forward in a game. They were
+	 * brightness, which is MENU plus the volume keys now (level_buttons). */
+	{ BTN_THUMBL,     DIATOM_BTN_F1 },    { BTN_THUMBR,     DIATOM_BTN_F2 },
 };
 
 /* ---- ChaOS: the Brick Pro's sticks -------------------------------------------
@@ -2075,8 +2078,9 @@ bool diatom_port_input_axes(int16_t out[4])
 	return g_sticks;
 }
 
-/* The four level buttons, as level keys: volume on its own two, brightness on
- * the two front keys (BTN_THUMBL and BTN_THUMBR), all on the gamepad. Never
+/* The level buttons, as level keys: volume on its own two, and - ChaOS - the
+ * same two with MENU held are brightness (the front keys are rewind and fast
+ * forward now), all on the gamepad. Never
  * reported as buttons, so no brightness press reaches a core. A press is
  * latched until the host has read it, so a tap between two frames counts; a
  * key the events say is held is checked against the kernel, so a release this
@@ -2085,9 +2089,10 @@ bool diatom_port_input_axes(int16_t out[4])
 static const struct { int code; uint32_t key; } level_buttons[] = {
 	{ KEY_VOLUMEUP,   DIATOM_LEVEL_KEY_VOLUME_UP },
 	{ KEY_VOLUMEDOWN, DIATOM_LEVEL_KEY_VOLUME_DOWN },
-	{ BTN_THUMBR,     DIATOM_LEVEL_KEY_BRIGHTNESS_UP },
-	{ BTN_THUMBL,     DIATOM_LEVEL_KEY_BRIGHTNESS_DOWN },
 };
+/* ChaOS: what each went down as, so letting go of MENU first cannot leave a
+ * brightness key held */
+static uint32_t g_level_as[2];
 #define LEVEL_BUTTONS (sizeof level_buttons / sizeof level_buttons[0])
 static uint32_t g_level_down;      /* held, by the events */
 static uint32_t g_level_pressed;   /* went down since the host last asked */
@@ -2098,12 +2103,21 @@ static bool level_button(int code, bool down)
 	size_t k;
 
 	for (k = 0; k < LEVEL_BUTTONS; k++) {
+		uint32_t key;
+
 		if (level_buttons[k].code != code) continue;
 		if (down) {
-			g_level_down    |= level_buttons[k].key;
-			g_level_pressed |= level_buttons[k].key;
+			key = level_buttons[k].key;
+			if (g_buttons & DIATOM_BIT(DIATOM_BTN_MENU))
+				key = key == DIATOM_LEVEL_KEY_VOLUME_UP ? DIATOM_LEVEL_KEY_BRIGHTNESS_UP
+				                                        : DIATOM_LEVEL_KEY_BRIGHTNESS_DOWN;
+			g_level_as[k] = key;
+			g_level_down    |= key;
+			g_level_pressed |= key;
 		} else {
-			g_level_down &= ~level_buttons[k].key;
+			key = g_level_as[k] ? g_level_as[k] : level_buttons[k].key;
+			g_level_down &= ~key;
+			g_level_as[k] = 0;
 		}
 		return true;
 	}
@@ -2199,6 +2213,7 @@ void diatom_port_input_reset(void)
 	SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
 	while (g_pad_fd >= 0 && read(g_pad_fd, ev, sizeof ev) > 0) { }
 	g_level_down = g_level_pressed = 0;
+	g_level_as[0] = g_level_as[1] = 0;
 	/* ChaOS: the sticks as calibrated now, at rest where they are */
 	if (g_sticks) sticks_load();
 	pad_resync();
@@ -2285,10 +2300,14 @@ uint32_t diatom_port_level_keys(void)
 		memset(keys, 0, sizeof keys);
 		if (g_pad_fd < 0 || ioctl(g_pad_fd, EVIOCGKEY(sizeof keys), keys) < 0)
 			memset(keys, 0, sizeof keys);
-		for (k = 0; k < LEVEL_BUTTONS; k++)
-			if ((g_level_down & level_buttons[k].key) &&
-			    !BIT_IS_SET(keys, level_buttons[k].code))
-				g_level_down &= ~level_buttons[k].key;
+		for (k = 0; k < LEVEL_BUTTONS; k++) {
+			uint32_t key = g_level_as[k] ? g_level_as[k] : level_buttons[k].key;
+
+			if ((g_level_down & key) && !BIT_IS_SET(keys, level_buttons[k].code)) {
+				g_level_down &= ~key;
+				g_level_as[k] = 0;
+			}
+		}
 	}
 	out = g_level_down | g_level_pressed;
 	g_level_pressed = 0;

@@ -806,7 +806,7 @@ static void idle_note_input(bool any)
 	}
 }
 
-/* Fast forward. The step the player chose with MENU+R1, 1 to 4, reset at
+/* Fast forward. The step the player chose with F2 (ChaOS; MENU+R1 before), 1 to 4, reset at
  * every RUN and kept across the menu. A state on the state plane that only
  * Diatom writes: `SPEED x=N`, as the reply to `SPEED` and unsolicited on every
  * change, so the launcher can say so on screen. */
@@ -1467,7 +1467,7 @@ static int run_session_inner(const diatom_session *sn)
 	double   frame_us, next_us;
 	uint64_t t_start, paused_us = 0;   /* menu time, excluded from the rate */
 	uint32_t buttons = 0, prev_buttons = 0, held_at_entry = 0;
-	uint32_t chord_hold = 0;    /* R1, while it belongs to MENU+R1 */
+	uint32_t chord_hold = 0;    /* X and SELECT, while they belong to MENU */
 	bool     menu_armed = false, menu_chorded = false;
 	long     fast_frames = 0, fast_turns = 0, fast_unshown = 0;
 	/* What a core frame costs, run to be shown and run to be skipped, kept
@@ -1786,7 +1786,7 @@ static int run_session_inner(const diatom_session *sn)
 		 * Never two turns running, so at worst every other picture is shown.
 		 * Not while rewinding, which has its own pace. */
 		static bool caught_up_last;
-		const uint32_t rw_keys = DIATOM_BIT(DIATOM_BTN_MENU) | DIATOM_BIT(DIATOM_BTN_L1);
+		const uint32_t rw_keys = DIATOM_BIT(DIATOM_BTN_F1);
 		const bool catchup = !fast && !caught_up_last && g_catchup &&
 		                     !(rewind_on() && (diatom_port_input_state() & rw_keys) == rw_keys) &&
 		                     (double)diatom_port_now_us() - next_us > frame_us * 0.75 &&
@@ -1823,9 +1823,9 @@ static int run_session_inner(const diatom_session *sn)
 		 * before, measured 2026-10-27. Each cost is now the whole step's, on
 		 * the wall clock, as the old rule's always was. */
 		const bool skips = fast && diatom_env_frame_skippable();
-		/* Rewind (ChaOS): MENU+L1 held steps the game back one saved state a
-		 * turn, shown with one frame run from it, in silence (rewind.h) */
-		const uint32_t rw_held = DIATOM_BIT(DIATOM_BTN_MENU) | DIATOM_BIT(DIATOM_BTN_L1);
+		/* Rewind (ChaOS): F1 held steps the game back one saved state a turn,
+		 * shown with one frame run from it, in silence (rewind.h) */
+		const uint32_t rw_held = DIATOM_BIT(DIATOM_BTN_F1);
 		const bool rewinding = rewind_on() &&
 		                       (diatom_port_input_state() & rw_held) == rw_held;
 		/* ChaOS: said to the launcher as it starts, and once a second
@@ -2039,19 +2039,20 @@ static int run_session_inner(const diatom_session *sn)
 		 * physically down stays latched. */
 		held_at_entry &= buttons;
 
-		/* R1 belongs to MENU+R1 from the moment MENU is down - not from when
-		 * R1 is, so the frame R1 goes down cannot leak into the game - and
-		 * stays hidden after MENU is let go, until R1 is too. */
+		/* X and SELECT belong to MENU+X and MENU+SELECT from the moment MENU
+		 * is down - not from when they are, so the frame one goes down cannot
+		 * leak into the game - and stay hidden after MENU is let go, until
+		 * they are too. (ChaOS: L1 and R1 are the game's again; rewind and
+		 * fast forward are F1 and F2.) */
 		if (buttons & DIATOM_BIT(DIATOM_BTN_MENU))
-			chord_hold = DIATOM_BIT(DIATOM_BTN_R1) | DIATOM_BIT(DIATOM_BTN_L1) |
-			             DIATOM_BIT(DIATOM_BTN_X);
+			chord_hold = DIATOM_BIT(DIATOM_BTN_X) | DIATOM_BIT(DIATOM_BTN_SELECT);
 		else                                       chord_hold &= buttons;
 
 		/* The single writer. Every reason to hide a button from the core is
 		 * composed here, so no reason can clear another. */
 		diatom_env_suppress(held_at_entry | chord_hold);
 
-		/* MENU+R1 steps the speed. MENU is a modifier, so it is armed by its
+		/* The chords. MENU is a modifier, so it is armed by its
 		 * press and acts on its RELEASE. */
 		{
 			uint32_t pressed = buttons & ~prev_buttons;
@@ -2067,11 +2068,21 @@ static int run_session_inner(const diatom_session *sn)
 			if (levels_moved() && (buttons & DIATOM_BIT(DIATOM_BTN_MENU)))
 				menu_chorded = true;
 
-			/* MENU+L1 is rewind (above, in the frame loop): a chord, so
-			 * letting go of MENU after it does not open the menu */
+			/* ChaOS: F1 or F2 while MENU is held - rewind, fast forward -
+			 * make MENU a chord too, so letting go of it opens nothing */
 			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
-			    (buttons & DIATOM_BIT(DIATOM_BTN_L1)) && rewind_on())
+			    (buttons & (DIATOM_BIT(DIATOM_BTN_F1) | DIATOM_BIT(DIATOM_BTN_F2))))
 				menu_chorded = true;
+			/* ChaOS: MENU+SELECT, save and quit: the game's resume state
+			 * and its own save are written on the way out, as for Quit in
+			 * the menu, and the launcher is back on the shelf */
+			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
+			    (pressed & DIATOM_BIT(DIATOM_BTN_SELECT))) {
+				menu_chorded = true;
+				printf("diatom: MENU+SELECT, saving and quitting\n");
+				fflush(stdout);
+				stop = true;
+			}
 			/* ChaOS: MENU+X, a screenshot: what the panel is showing right
 			 * now - the game with its shader and overlay, as the player
 			 * sees it - to a file the launcher files under the game and
@@ -2086,8 +2097,8 @@ static int run_session_inner(const diatom_session *sn)
 				if (diatom_proto_connected() && diatom_port_capture(sp))
 					diatom_proto_send("SHOT\tpath=%s", sp);
 			}
-			if ((buttons & DIATOM_BIT(DIATOM_BTN_MENU)) &&
-			    (pressed & DIATOM_BIT(DIATOM_BTN_R1))) {
+			/* ChaOS: F2 steps the speed, 1x to 4x and back */
+			if (pressed & DIATOM_BIT(DIATOM_BTN_F2)) {
 				step_report(g_speed, step_frames, step_periods,
 				            diatom_port_now_us() - step_t0,
 				            diatom_audio_dropped() - step_drop0);

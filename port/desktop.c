@@ -483,6 +483,8 @@ static const struct { SDL_Scancode key; int btn; } keymap[] = {
 	{ SDL_SCANCODE_RSHIFT, DIATOM_BTN_SELECT },
 	{ SDL_SCANCODE_RETURN, DIATOM_BTN_START  },
 	{ SDL_SCANCODE_ESCAPE, DIATOM_BTN_MENU   },
+	{ SDL_SCANCODE_F1,     DIATOM_BTN_F1     },   /* ChaOS: rewind */
+	{ SDL_SCANCODE_F2,     DIATOM_BTN_F2     },   /* ChaOS: fast forward */
 };
 
 void diatom_port_input_poll(void)

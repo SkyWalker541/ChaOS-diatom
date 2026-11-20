@@ -81,6 +81,10 @@ enum {
 	 * the launcher protocol it hands the display over for a menu. A port that
 	 * decided this itself would make that impossible. */
 	DIATOM_BTN_MENU,
+	/* ChaOS: the Brick's two front keys. Diatom's own, like MENU, and never
+	 * forwarded to a core: in a game F1 (held) is rewind and F2 fast forward.
+	 * Brightness is MENU plus the volume keys, which the port resolves. */
+	DIATOM_BTN_F1, DIATOM_BTN_F2,
 	DIATOM_BTN_COUNT
 };
 #define DIATOM_BIT(b) (1u << (b))
