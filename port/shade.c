@@ -271,6 +271,8 @@ bool shade_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
 	return true;
 }
 
+unsigned shade_frame_no(void) { return cs_light_frame(g_ctx); }
+
 void shade_cost(double *ms, unsigned *frames, int *threads)
 {
 	pthread_mutex_lock(&g_set_mx);

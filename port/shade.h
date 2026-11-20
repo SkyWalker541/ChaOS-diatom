@@ -45,5 +45,7 @@ void shade_shutdown(void);
 /* diatom_port_shade_cost's: frames drawn with the settings now in force and
  * their average ms, and the threads that draw. Any thread. */
 void shade_cost(double *ms, unsigned *frames, int *threads);
+/* ChaOS: diatom_port_shade_frame's: the frame the light now drawn is for */
+unsigned shade_frame_no(void);
 
 #endif

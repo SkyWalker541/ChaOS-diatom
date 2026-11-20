@@ -97,6 +97,10 @@ typedef struct pt_band pt_band;
  * frame: a frame counter, as RetroArch's FrameCount; only the drifting light
  *        of Glare and sheen uses it.
  * Returns 0, or -1 if memory for a new size could not be had. */
+/* ChaOS: the frame the light drawn now is for: a drifting light is shown in
+ * steps (pt_shader.c, DRIFT_STEP), so not always the frame last begun. */
+unsigned pt_light_frame(const pt_ctx *c);
+
 int pt_render(pt_ctx *c, const uint32_t *src, int w, int h, size_t src_pitch,
               int scale, uint32_t *dst, size_t dst_pitch, const pt_format *fmt,
               unsigned frame);

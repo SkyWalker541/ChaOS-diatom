@@ -105,6 +105,11 @@ void cs_destroy(cs_ctx *c)
 
 int cs_kind(const cs_ctx *c) { return c ? c->kind : CS_NONE; }
 
+unsigned cs_light_frame(const cs_ctx *c)
+{
+	return c && c->kind == CS_PT ? pt_light_frame(c->pt) : 0;
+}
+
 void cs_set_params(cs_ctx *c, const float *v)
 {
 	switch (c->kind) {
