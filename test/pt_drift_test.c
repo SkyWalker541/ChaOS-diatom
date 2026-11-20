@@ -37,6 +37,10 @@ int main(void)
 
 			if (pt_begin_frame(c, src, W, H, W, S, (unsigned)f)) { puts("FAIL: begin"); return 1; }
 			for (k = 0; k < 3; k++) pt_render_band(c, bd[k], oh * k / 3, oh * (k + 1) / 3, a, W * S, &fmt);
+			if (pt_light_frame(c) != (unsigned)shown) {
+				printf("FAIL: frame %d says its light is frame %u's, not %d's\n", f, pt_light_frame(c), shown);
+				fails++;
+			}
 			fresh = pt_create();
 			pt_set_params(fresh, &p);
 			pt_render(fresh, src, W, H, W, S, b, W * S, &fmt, (unsigned)shown);

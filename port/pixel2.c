@@ -1242,6 +1242,8 @@ void diatom_port_shader(diatom_shader kind, const float *params, int nparams)
 	(void)kind; (void)params; (void)nparams;
 }
 
+unsigned diatom_port_shade_frame(void) { return 0; }
+
 void diatom_port_shade_cost(double *ms, unsigned *frames, int *threads)
 {
 	*ms = 0.0; *frames = 0; *threads = 1;

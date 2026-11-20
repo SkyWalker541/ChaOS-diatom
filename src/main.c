@@ -315,7 +315,11 @@ static bool write_shaded(const char *path, diatom_rect *where)
 	cs_set_params(c, v);
 	{
 		uint64_t t0 = diatom_port_now_us();
-		if (cs_begin_frame_size(c, in, w, h, (size_t)w, ow, oh, 0) ||
+		/* ChaOS: at the frame the game was last drawn at, so a drifting
+		 * light is where the game has it - frame 0 put it where it
+		 * started, and the picture behind the menu (Hold Y) showed the
+		 * glare and sheen somewhere the game didn't */
+		if (cs_begin_frame_size(c, in, w, h, (size_t)w, ow, oh, diatom_port_shade_frame()) ||
 		    cs_render_rows(c, band, 0, oh, out, (size_t)ow, &fmt)) goto done;
 		g_preview_ms = (double)(diatom_port_now_us() - t0) / 1000.0;
 	}

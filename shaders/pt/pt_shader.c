@@ -180,6 +180,8 @@ struct pt_ctx {
 	uint16_t *bglk;
 	float    *bgax;              /* ow: gax for blight */
 	float     blight[3];         /* the light being built behind */
+	unsigned  light_frame;       /* the frame `light` is for */
+	unsigned  blight_frame;      /* and blight's */
 	int       drift;             /* the light moves: build behind */
 	unsigned  gcount;            /* frames begun, for the quarters */
 	int       bphase;            /* this frame's quarter: rows with y % DRIFT_STEP == it */
@@ -242,6 +244,8 @@ static int band_fit(pt_band *b, int ow)
 	b->cap = ow;
 	return 0;
 }
+
+unsigned pt_light_frame(const pt_ctx *c) { return c ? c->light_frame : 0; }
 
 pt_ctx *pt_create(void)
 {
@@ -885,13 +889,14 @@ int pt_begin_frame_size(pt_ctx *c, const uint32_t *src, int w, int h, size_t src
 		c->drift = P[PT_LIGHT_DRIFT_SPEED] > 0.001f;
 		if (!c->drift) {
 			pt_light(P, frame, c->light);
+			c->light_frame = frame;
 			if (glare_alloc(c)) return -1;
 		} else {
 			/* ChaOS: the light drifts. The first frame, or after a
 			 * change of settings or size, builds the whole picture
 			 * for this frame's light; after that the light it
 			 * shows changes only by a swap (DRIFT_STEP above). */
-			if (!was_ok) pt_light(P, frame, c->light);
+			if (!was_ok) { pt_light(P, frame, c->light); c->light_frame = frame; }
 			if (glare_alloc(c)) return -1;
 			if (glare_back_alloc(c)) return -1;
 			if (!was_ok) { c->bdone = -1; c->gcount = 0; }
@@ -905,11 +910,13 @@ int pt_begin_frame_size(pt_ctx *c, const uint32_t *src, int w, int h, size_t src
 					t = c->glb; c->glb = c->bglb; c->bglb = t;
 					u = c->glk; c->glk = c->bglk; c->bglk = u;
 					memcpy(c->light, c->blight, sizeof c->light);
+					c->light_frame = c->blight_frame;
 					for (y = 0; y < c->oh; y++) memcpy(c->rowlight[y], c->light, sizeof c->light);
 					glare_columns(c);
 				}
 				/* the next light: where it will be when it's shown */
 				pt_light(P, frame + DRIFT_STEP, c->blight);
+				c->blight_frame = frame + DRIFT_STEP;
 				light_columns(c, c->blight, c->bgax);
 				c->bdone = 0;
 			}

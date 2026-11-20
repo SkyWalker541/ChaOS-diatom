@@ -152,6 +152,11 @@ void diatom_port_shader(diatom_shader kind, const float *params, int nparams);
  * frames that is, and how many threads draw it. A port that draws no shaders
  * says 0 frames. */
 void diatom_port_shade_cost(double *ms, unsigned *frames, int *threads);
+/* ChaOS: the frame number the shader last drew, which places a moving
+ * light (PT's Light Drift), so a still picture drawn while the game is
+ * paused shows the light where the game has it. 0 for a port that draws no
+ * shader. */
+unsigned diatom_port_shade_frame(void);
 
 /* A bezel: an image drawn over every frame, picture and margins alike (ChaOS).
  * Straight-alpha BGRA, w x h, which must be the panel's size; NULL removes it.

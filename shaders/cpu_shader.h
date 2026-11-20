@@ -39,6 +39,10 @@ int         cs_param_index(int kind, const char *name);
 cs_ctx  *cs_create(int kind);
 void     cs_destroy(cs_ctx *c);
 int      cs_kind(const cs_ctx *c);
+/* ChaOS: the frame the light now drawn is for (PT's drifting light), so a
+ * still picture of the paused game can be drawn with the same light; 0 when
+ * nothing drawn moves with time. */
+unsigned cs_light_frame(const cs_ctx *c);
 /* cs_nparams(kind) values */
 void     cs_set_params(cs_ctx *c, const float *v);
 /* src is 0x00RRGGBB, kept until the frame is drawn. 0 on success. */
