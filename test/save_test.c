@@ -27,6 +27,14 @@ static int first_byte(const char *p)
 	c = fgetc(f); fclose(f); return c;
 }
 
+/* the writer is another thread: wait for its write rather than guess how
+ * long it takes on a busy machine (up to 5 s) */
+static void wait_byte(const char *p, int b)
+{
+	int i;
+	for (i = 0; i < 500 && first_byte(p) != b; i++) usleep(10000);
+}
+
 static void put(const char *p, int b)
 {
 	unsigned char buf[sizeof ram]; FILE *f = fopen(p, "wb");
@@ -50,18 +58,18 @@ int main(void)
 	diatom_save_init(&c, dir, "/roms/Game.m3u");
 	CHECK(ram[0] == 0x11, "save loaded into the game");
 	ram[0] = 0x22;
-	diatom_save_now(); usleep(200000);
+	diatom_save_now(); wait_byte(srm, 0x22);
 	CHECK(first_byte(srm) == 0x22, "the change written at once on request");
 	CHECK(first_byte(bak) == 0x11, "the copy from before the game kept as .bak");
 	ram[0] = 0x33;
-	diatom_save_now(); usleep(200000);
+	diatom_save_now(); wait_byte(srm, 0x33);
 	CHECK(first_byte(bak) == 0x11, ".bak still the copy from before the game");
 
 	/* 2: a copy dropped in while the game runs is kept, not lost */
 	sleep(1);   /* past the mtime granularity */
 	put(srm, 0x44);
 	ram[0] = 0x55;
-	diatom_save_now(); usleep(200000);
+	diatom_save_now(); wait_byte(srm, 0x55);
 	CHECK(first_byte(out) == 0x44, "the copy changed outside kept as .outside");
 	CHECK(first_byte(srm) == 0x55, "the game's own save written");
 	diatom_save_shutdown();
@@ -83,10 +91,10 @@ int main(void)
 	 * and its writer must start again for each */
 	diatom_save_init(&c, dir, "/roms/Game.m3u");
 	ram[0] = 0x77;
-	diatom_save_tick(); diatom_save_now(); usleep(200000);
+	diatom_save_tick(); diatom_save_now(); wait_byte(srm, 0x77);
 	CHECK(first_byte(srm) == 0x77, "a later game's save written while it runs");
 	ram[0] = 0x78;
-	usleep(1100000); diatom_save_tick(); usleep(200000);
+	usleep(1100000); diatom_save_tick(); wait_byte(srm, 0x78);
 	diatom_save_shutdown();
 	CHECK(first_byte(srm) == 0x78, "and its last save there after it ends");
 
