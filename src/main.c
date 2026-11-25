@@ -880,6 +880,52 @@ static void speed_emit(void)
 	if (diatom_proto_connected()) diatom_proto_send("SPEED\tx=%d", g_speed);
 }
 
+/* ChaOS: the launcher's "Loading..." kept on the panel while a PlayStation
+ * game boots. Its first seconds are black frames while the disc loads -
+ * sixteen of them for Castlevania - and presenting them replaced the
+ * launcher's word with a black panel that looked like a hang (Aquilus,
+ * 2026-11-25). Only presenting waits: the game runs, hears input and plays
+ * its sound as always. Ends at the first frame with anything in it, at a
+ * pause, or after HOLD_DARK_US. */
+#define HOLD_DARK_US 25000000ull
+static uint64_t g_hold_until;   /* 0: not holding */
+static uint64_t g_hold_from;
+
+static bool frame_dark(void)
+{
+	int x, y;
+
+	if (!g_frame || g_frame_w <= 0 || g_frame_h <= 0) return true;
+	/* every other row, every fourth pixel: an early "no" is the usual answer */
+	for (y = 0; y < g_frame_h; y += 2) {
+		const uint8_t *row = (const uint8_t *)g_frame + (size_t)y * g_frame_pitch;
+
+		if (g_policy.pixfmt == DIATOM_PIX_XRGB8888) {
+			const uint32_t *px = (const uint32_t *)row;
+
+			for (x = 0; x < g_frame_w; x += 4) if (px[x] & 0x00E0E0E0u) return false;
+		} else {
+			const uint16_t *px = (const uint16_t *)row;
+
+			for (x = 0; x < g_frame_w; x += 4) if (px[x] & 0xE71Cu) return false;   /* each channel past 1/8 */
+		}
+	}
+	return true;
+}
+
+/* True while the panel should keep the launcher's frame */
+static bool holding_dark(void)
+{
+	uint64_t now;
+
+	if (!g_hold_until) return false;
+	now = diatom_port_now_us();
+	if (now < g_hold_until && (!g_frame_fresh || frame_dark())) return true;
+	printf("diatom: first picture after %.1f s of black\n", (now - g_hold_from) / 1e6);
+	g_hold_until = 0;
+	return false;
+}
+
 static bool take_pause_request(void)
 {
 	bool v = g_pause_requested;
@@ -889,6 +935,7 @@ static bool take_pause_request(void)
 
 static bool menu_pause(const diatom_session *sn)
 {
+	g_hold_until = 0;   /* the menu takes the panel; back from it, the game shows */
 	/* The pause preview goes out BEFORE PAUSED, so by the time the launcher
 	 * hears it owns the display, the frame it will dim and draw its menu over
 	 * is already on disk. The order is the contract. */
@@ -1705,6 +1752,11 @@ static int run_session_inner(const diatom_session *sn)
 	 * warmup, because the warmup already puts frames on the panel. */
 	diatom_proto_send("RUNNING");
 	g_phase = PHASE_RUNNING;   /* a crash from here on is EXIT, not ERROR */
+	g_hold_until = 0;
+	if (diatom_proto_active() && si.library_name && !strncmp(si.library_name, "PCSX", 4)) {
+		g_hold_from = diatom_port_now_us();
+		g_hold_until = g_hold_from + HOLD_DARK_US;
+	}
 
 	/* A set sent with RUN is watched from the first frame. A launcher that is
 	 * still fetching one sends SETCHEEVOS when it arrives; both paths run the
@@ -1759,9 +1811,10 @@ static int run_session_inner(const diatom_session *sn)
 		g_audio_warmup = true;
 		for (w = 0; w < 3; w++) {
 			g_core->run(); g_runs++;
-			diatom_port_present(g_frame, g_frame_w, g_frame_h, g_frame_pitch,
-			                    g_policy.pixfmt, g_dst,
-			                    g_filter);
+			if (!holding_dark())
+				diatom_port_present(g_frame, g_frame_w, g_frame_h, g_frame_pitch,
+				                    g_policy.pixfmt, g_dst,
+				                    g_filter);
 		}
 		g_audio_warmup = false;
 		printf("diatom: warmup 3 frames in %.1f ms\n",
@@ -1986,10 +2039,11 @@ static int run_session_inner(const diatom_session *sn)
 
 		{
 			uint64_t p0 = diatom_port_now_us();
-			diatom_port_present(g_frame_fresh ? g_frame : NULL,
-			                    g_frame_w, g_frame_h, g_frame_pitch,
-			                    g_policy.pixfmt, g_dst,
-			                    g_filter);
+			if (!holding_dark())
+				diatom_port_present(g_frame_fresh ? g_frame : NULL,
+				                    g_frame_w, g_frame_h, g_frame_pitch,
+				                    g_policy.pixfmt, g_dst,
+				                    g_filter);
 			g_present_us += diatom_port_now_us() - p0;
 			g_present_frames++;
 		}

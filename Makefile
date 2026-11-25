@@ -152,7 +152,7 @@ $(BUILD)/%.o: %.c
 # backend exists. Cheap to check, so check it.
 # Mechanical checks, each guarding a rule that decays the moment nothing fails
 # when it is broken: check-seam has held since day one for exactly that reason.
-check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift check-rewind-end
+check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift check-rewind-end check-holddark
 
 # The checks that run without SDL, built with AddressSanitizer and
 # UndefinedBehaviorSanitizer into build/asan, so an overrun, a use after free
@@ -263,6 +263,12 @@ check-proto:
 check-stateplane:
 	$(FRESH_IF_BUILT)
 	@python3 test/stateplane.py
+
+# ChaOS: a PlayStation game's black boot frames keep the launcher's
+# "Loading..." up (test/holddark.py)
+check-holddark:
+	$(FRESH_IF_BUILT)
+	@python3 test/holddark.py
 
 # The port's audio contract: falls back, is idempotent, and ALWAYS returns.
 # The last one is the reason this exists - a close that joins a stuck audio

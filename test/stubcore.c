@@ -83,7 +83,9 @@ unsigned retro_api_version(void) { return RETRO_API_VERSION; }
 void retro_get_system_info(struct retro_system_info *info)
 {
 	memset(info, 0, sizeof *info);
-	info->library_name     = "diatom-stub";
+	/* STUBCORE_DARK=N: N black frames first, under a PlayStation core's name,
+	 * for the dark-start hold (test/holddark.py) */
+	info->library_name     = getenv("STUBCORE_DARK") ? "PCSX-stub" : "diatom-stub";
 	info->library_version  = "1";
 	info->valid_extensions = "stub";
 	info->need_fullpath    = false;
@@ -345,6 +347,8 @@ void retro_run(void)
 		for (x = box_x * xs; x < (box_x + 32) * xs && x < cur_w; x++)
 			fb[y * cur_w + x] = rgb565(220, 90, 40);
 
+	if (getenv("STUBCORE_DARK") && frame < (unsigned)atoi(getenv("STUBCORE_DARK")))
+		memset(fb, 0, (size_t)cur_w * (size_t)cur_h * sizeof(uint16_t));
 	video_cb(fb, (unsigned)cur_w, (unsigned)cur_h, (size_t)cur_w * sizeof(uint16_t));
 
 	for (i = 0; i < n; i++) {
