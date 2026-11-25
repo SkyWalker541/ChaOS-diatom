@@ -21,6 +21,15 @@ the devices.
 import socket, subprocess, sys, time, os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOCK = "/tmp/diatom-stateplane.sock"
+
+# Skips rather than builds when there is no binary, as test/proto.py does and
+# the Makefile promises: until 2026-11-25 it raised instead, which nothing saw
+# while build/desktop always held a binary; a fresh clone (CI's) showed it.
+BIN = f"{ROOT}/build/desktop/diatom"
+if not os.path.exists(BIN):
+    print(f"  skip  state plane: no {os.path.relpath(BIN, ROOT)}; run make first")
+    sys.exit(0)
+
 if os.path.exists(SOCK): os.unlink(SOCK)
 
 # What went to the device, for the quiet check at the end: the stub core's
@@ -28,7 +37,7 @@ if os.path.exists(SOCK): os.unlink(SOCK)
 TAP = "/tmp/diatom-stateplane-tap"
 for ext in (".in.raw", ".out.raw"):
     if os.path.exists(TAP + ext): os.unlink(TAP + ext)
-p = subprocess.Popen([f"{ROOT}/build/desktop/diatom", "--socket", SOCK,
+p = subprocess.Popen([BIN, "--socket", SOCK,
                       "--tap-audio", TAP],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 for _ in range(100):
