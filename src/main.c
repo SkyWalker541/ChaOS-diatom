@@ -109,6 +109,10 @@ static size_t      g_frame_cap;
 static int         g_frame_w, g_frame_h;
 static size_t      g_frame_pitch;
 static bool        g_frame_fresh;
+/* Frames the core has run, warm-up included, for the display line: which
+ * geometry a rect was computed from, and when, is what tells a player's
+ * "full screen, then smaller" apart (2026-11-25). */
+static unsigned long g_runs;
 
 /* The state plane, defined below but reachable from the menu loop that comes
  * first. */
@@ -718,9 +722,10 @@ static void apply_display(int mode, diatom_filter filter)
 	g_filter = filter;
 	g_dst = diatom_scale_rect(diatom_modes[mode].mode, g_base_w, g_base_h,
 	                          g_base_aspect, g_caps.surface_w, g_caps.surface_h);
-	printf("diatom: display %-10s %-7s %4dx%-4d at %4d,%-4d  %s\n",
+	printf("diatom: display %-10s %-7s %4dx%-4d at %4d,%-4d  src=%dx%d surface=%dx%d frame=%lu  %s\n",
 	       diatom_modes[mode].name, filter_name(filter),
-	       g_dst.w, g_dst.h, g_dst.x, g_dst.y, diatom_modes[mode].note);
+	       g_dst.w, g_dst.h, g_dst.x, g_dst.y, g_base_w, g_base_h,
+	       g_caps.surface_w, g_caps.surface_h, g_runs, diatom_modes[mode].note);
 	fflush(stdout);
 
 	/* Reported from the ONE place the mode ever changes, so a launcher hears
@@ -1753,7 +1758,7 @@ static int run_session_inner(const diatom_session *sn)
 		int w;
 		g_audio_warmup = true;
 		for (w = 0; w < 3; w++) {
-			g_core->run();
+			g_core->run(); g_runs++;
 			diatom_port_present(g_frame, g_frame_w, g_frame_h, g_frame_pitch,
 			                    g_policy.pixfmt, g_dst,
 			                    g_filter);
@@ -1852,7 +1857,7 @@ static int run_session_inner(const diatom_session *sn)
 			g_audio_fast = true;
 			diatom_env_frame_shown(true);
 			if (rewind_step(g_core)) {
-				g_core->run();
+				g_core->run(); g_runs++;
 				frames++;
 			} else {
 				/* ChaOS: nothing left to go back to, so no frame runs - and
@@ -1875,7 +1880,7 @@ static int run_session_inner(const diatom_session *sn)
 			if (catchup) shown = ran > 0;   /* ChaOS: the first of the two isn't drawn */
 			diatom_env_frame_shown(shown);
 
-			g_core->run();
+			g_core->run(); g_runs++;
 			frames++;
 			ran++;
 
