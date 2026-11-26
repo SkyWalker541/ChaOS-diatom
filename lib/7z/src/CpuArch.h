@@ -434,7 +434,14 @@ MY_CPU_64BIT means that processor can work with 64-bit registers.
 
 
 
-#ifdef MY_CPU_LE
+/* ChaOS: never by casting a byte pointer to a wider one. Those reads land
+ * at any offset in a 7z's bytes, which C leaves undefined even where the CPU
+ * allows it (UBSan in check-asan found them, 2026-11-25), and an optimiser
+ * may assume such a pointer is aligned. The byte-by-byte forms below are what
+ * 7-Zip uses on 32-bit ARM; GCC folds them into the same single load on
+ * arm64 and x86, so it costs nothing. */
+#define Z7_CHAOS_NO_UNALIGNED_CASTS
+#if defined(MY_CPU_LE) && !defined(Z7_CHAOS_NO_UNALIGNED_CASTS)
   #if defined(MY_CPU_X86_OR_AMD64) \
       || defined(MY_CPU_ARM64) \
       || defined(MY_CPU_RISCV) && defined(__riscv_misaligned_fast) \
