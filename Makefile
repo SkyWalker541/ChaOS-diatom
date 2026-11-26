@@ -158,7 +158,7 @@ $(BUILD)/%.o: %.c
 # backend exists. Cheap to check, so check it.
 # Mechanical checks, each guarding a rule that decays the moment nothing fails
 # when it is broken: check-seam has held since day one for exactly that reason.
-check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift check-rewind-end check-holddark check-romerror check-corelog
+check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift check-rewind-end check-holddark check-romerror check-corelog check-cpufreq
 
 # The checks that run without SDL, built with AddressSanitizer and
 # UndefinedBehaviorSanitizer into build/asan, so an overrun, a use after free
@@ -180,6 +180,12 @@ SANITIZE = -fsanitize=address,undefined -fno-omit-frame-pointer \
 check-asan:
 	@$(MAKE) --no-print-directory BUILD=build/asan check-cheevos \
 	         CC="$(CC) $(SANITIZE)"
+
+# ChaOS: fast-forward's clock released onto the launcher's floor (port/port_cpufreq.h)
+check-cpufreq:
+	@mkdir -p build
+	$(CC) -std=gnu11 -Wall -Wextra -O1 -o build/cpufreq_test test/cpufreq_test.c
+	@./build/cpufreq_test
 
 # Rewind (ChaOS): a fake core run forward and stepped back, offline
 check-cheats:

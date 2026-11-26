@@ -25,8 +25,33 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/* Overridable only so test/cpufreq_test.c can point them at a folder */
+#ifndef DIATOM_CPUFREQ
 #define DIATOM_CPUFREQ "/sys/devices/system/cpu/cpu0/cpufreq/"
+#endif
+#ifndef DIATOM_CPUFREQ_BOOST
 #define DIATOM_CPUFREQ_BOOST "/sys/devices/system/cpu/cpufreq/boost"
+#endif
+
+/* ChaOS: the floor to hand back to, when the launcher has set one for the
+ * game (its Performance, src/cpumode.h in chaos): written there before RUN
+ * and removed when the game ends. Without it, the hardware's minimum as
+ * before. Read only when the hold changes, which is at a game's first turn
+ * and at fast-forward's start and end. */
+#ifndef DIATOM_CPUFREQ_FLOOR
+#define DIATOM_CPUFREQ_FLOOR "/tmp/chaos-cpu-floor"
+#endif
+
+static inline const char *diatom_cpufreq_floor(void)
+{
+	FILE *f = fopen(DIATOM_CPUFREQ_FLOOR, "r");
+	unsigned long khz = 0;
+
+	if (!f) return DIATOM_CPUFREQ "cpuinfo_min_freq";
+	if (fscanf(f, "%lu", &khz) != 1) khz = 0;
+	fclose(f);
+	return khz > 0 ? DIATOM_CPUFREQ_FLOOR : DIATOM_CPUFREQ "cpuinfo_min_freq";
+}
 
 static inline bool diatom_cpufreq_write(const char *to, const char *v)
 {
@@ -86,7 +111,7 @@ static inline bool diatom_cpufreq_hold_top(bool on, bool boost)
 	held = on;
 	if (!boost)
 		return diatom_cpufreq_copy(on ? DIATOM_CPUFREQ "cpuinfo_max_freq"
-		                              : DIATOM_CPUFREQ "cpuinfo_min_freq",
+		                              : diatom_cpufreq_floor(),
 		                           DIATOM_CPUFREQ "scaling_min_freq");
 	if (on) {
 		if (diatom_cpufreq_write(DIATOM_CPUFREQ_BOOST, "1"))
@@ -96,7 +121,7 @@ static inline bool diatom_cpufreq_hold_top(bool on, bool boost)
 		                           DIATOM_CPUFREQ "scaling_min_freq") && ok;
 	}
 	/* The minimum first, so it is never above the maximum being lowered */
-	ok = diatom_cpufreq_copy(DIATOM_CPUFREQ "cpuinfo_min_freq",
+	ok = diatom_cpufreq_copy(diatom_cpufreq_floor(),
 	                         DIATOM_CPUFREQ "scaling_min_freq");
 	if (diatom_cpufreq_write(DIATOM_CPUFREQ_BOOST, "0"))
 		ok = diatom_cpufreq_cap_unboosted() && ok;
