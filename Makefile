@@ -158,7 +158,7 @@ $(BUILD)/%.o: %.c
 # backend exists. Cheap to check, so check it.
 # Mechanical checks, each guarding a rule that decays the moment nothing fails
 # when it is broken: check-seam has held since day one for exactly that reason.
-check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift check-rewind-end check-holddark check-romerror
+check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift check-rewind-end check-holddark check-romerror check-corelog
 
 # The checks that run without SDL, built with AddressSanitizer and
 # UndefinedBehaviorSanitizer into build/asan, so an overrun, a use after free
@@ -274,6 +274,12 @@ check-stateplane:
 check-romerror:
 	$(FRESH_IF_BUILT)
 	@python3 test/romerror.py
+
+# ChaOS: RUN's corelog=1 keeps a core's own messages for that game, and only
+# that game (test/corelog.py): ChaOS's Logging > Emulator Details
+check-corelog:
+	$(FRESH_IF_BUILT)
+	@python3 test/corelog.py
 
 # ChaOS: a PlayStation game's black boot frames keep the launcher's
 # "Loading..." up (test/holddark.py)

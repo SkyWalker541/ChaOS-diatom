@@ -247,6 +247,8 @@ static void parse_line(char *line, diatom_msg *out)
 		else if (!strcmp(field, "cheevos"))
 			snprintf(out->cheevos, sizeof out->cheevos, "%s", v);
 		else if (!strcmp(field, "console")) out->console = (int)strtol(v, NULL, 10);
+		/* ChaOS: RUN's corelog=1, the core's every message kept this game */
+		else if (!strcmp(field, "corelog")) out->corelog = (int)strtol(v, NULL, 10);
 		else if (!strcmp(field, "key"))  snprintf(out->key,   sizeof out->key,   "%s", v);
 		else if (!strcmp(field, "value"))snprintf(out->value, sizeof out->value, "%s", v);
 		else if (!strcmp(field, "map"))  snprintf(out->map,   sizeof out->map,   "%s", v);

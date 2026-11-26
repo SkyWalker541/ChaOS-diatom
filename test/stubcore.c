@@ -64,11 +64,18 @@ static int      box_x = 96, box_y = 80;
 static double   phase;
 static double   audio_accum;
 
+static retro_log_printf_t stub_log;
+
 void retro_set_environment(retro_environment_t cb)
 {
 	bool no_game = true;
 	env = cb;
 	cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_game);
+	/* STUBCORE_LOG: an INFO line every 10 frames, as a chatty core's (test/corelog.py) */
+	if (getenv("STUBCORE_LOG")) {
+		struct retro_log_callback l = { 0 };
+		if (cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &l)) stub_log = l.log;
+	}
 }
 void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
 void retro_set_audio_sample(retro_audio_sample_t cb)   { (void)cb; }
@@ -347,6 +354,7 @@ void retro_run(void)
 		for (x = box_x * xs; x < (box_x + 32) * xs && x < cur_w; x++)
 			fb[y * cur_w + x] = rgb565(220, 90, 40);
 
+	if (stub_log && frame % 10 == 0) stub_log(RETRO_LOG_INFO, "stub chatter %u\n", frame);
 	if (getenv("STUBCORE_DARK") && frame < (unsigned)atoi(getenv("STUBCORE_DARK")))
 		memset(fb, 0, (size_t)cur_w * (size_t)cur_h * sizeof(uint16_t));
 	video_cb(fb, (unsigned)cur_w, (unsigned)cur_h, (size_t)cur_w * sizeof(uint16_t));

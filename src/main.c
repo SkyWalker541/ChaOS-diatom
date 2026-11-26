@@ -125,6 +125,7 @@ typedef struct diatom_session {
 	const char   *firmware;   /* what the launcher says this content needs */
 	const char   *cheevos;    /* an achievement set to watch */
 	int           console;    /* which console's address space it is written against */
+	bool          core_log;   /* ChaOS: the core's own messages kept in the game (corelog=1) */
 	long          limit;
 	int           mode;
 	diatom_filter filter;
@@ -1805,7 +1806,7 @@ static int run_session_inner(const diatom_session *sn)
 	 * not, and under the launcher it is written to the SD card. The measurement
 	 * is in env.c; the short version is that mGBA's per-DMA logging cost 16 fps
 	 * and put a real hole in the audio. */
-	diatom_env_core_log_quiet(true);
+	diatom_env_core_log_quiet(!sn->core_log);
 
 	{
 		uint64_t w0 = diatom_port_now_us();
@@ -2650,6 +2651,10 @@ int main(int argc, char **argv)
 			sn.preview    = m.preview[0]    ? m.preview    : NULL;
 			sn.cheevos    = m.cheevos[0]    ? m.cheevos    : NULL;
 			sn.console    = m.console;
+			/* ChaOS: the launcher's Logging > Emulator Details, which
+			 * keeps the core's chatter: it costs speed, so off unless
+			 * asked for, game by game */
+			sn.core_log   = m.corelog != 0;
 			sn.mode   = start_mode;
 			sn.filter = start_filter;
 			/* ChaOS: the console's Display Mode on the RUN itself

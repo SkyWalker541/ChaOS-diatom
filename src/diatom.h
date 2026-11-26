@@ -262,6 +262,7 @@ typedef struct {
 	                        * SETCHANNELS: one from diatom_channels_names[].
 	                        * Both arrive as `mode=`, so one slot. */
 	char dfilter[16];      /* SETDISPLAY: nearest | sharp */
+	int  corelog;          /* RUN: 1 keeps the core's DEBUG/INFO (ChaOS) */
 	int  index, count;     /* SETLEVEL: `count` is POSITIONS, not a max index.
 	                        * OVERLAY: `count` is the duration in ms, sent as
 	                        * `ms=`. One slot, two verbs, no second name. */
