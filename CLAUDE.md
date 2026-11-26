@@ -41,6 +41,15 @@ that adds a feature and breaks another is not done.
 - Saves and settings survive every update.
 - Gaming comes first: nothing runs in the background during a game.
 - Menus never overflow (`make check-menus`; `TORTOS_FITSPY=1` lists cut text).
+- **A row always does what it says, however many rows are around it.** The
+  regression this project keeps having: a menu acts on rows by position
+  ("row 4"), a row is added or shown only sometimes, and every row after it
+  is off by one, so pressing one setting changes its neighbour. Rows are
+  acted on by what they are (an id the build gives each row), never by
+  where they are; a list of like items (games, networks) indexes the same
+  array its build used. A new or changed row is tested in every state its
+  menu can be in, by pressing each row and seeing that the right setting
+  moved, and `make check` enforces it.
 - Retro accuracy matters.
 - Related settings are grouped into sub-menus.
 - GitHub Discussions is off: send people to the ChaOS Control Discord.
