@@ -51,6 +51,52 @@ EGL), all provided by the system it runs on: on the GKD Pixel 2 and the TrimUI
 Brick that is plastron, whose package list on a card is
 `Licenses/plastron-packages.md`.
 
+## `lib/zstd/` (added in the ChaOS fork)
+
+**Zstandard's decoder**, for games in zips made with Zstandard (zip method
+93): `lib/zstd/zstddeclib.c` is zstd 1.5.6's decompressor as its own
+`build/single_file_libs/create_single_file_decoder.sh` makes it, unchanged,
+with `zstd.h` beside it. Zstandard is dual-licensed BSD and GPLv2; it is
+used here under the BSD license, kept whole in `lib/zstd/LICENSE`:
+
+```
+BSD License
+
+For Zstandard software
+
+Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+ * Neither the name Facebook, nor Meta, nor the names of its contributors may
+   be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+## `lib/7z/` (added in the ChaOS fork)
+
+**7-Zip's C decoder** (LZMA SDK, Igor Pavlov), for games in `.7z` archives,
+**public domain**, as its own headers say.
+
 ## `shaders/pt/` (added in the ChaOS fork)
 
 **PT SkyWalker541**, the pixel transparency shader for Game Boy, Game Boy

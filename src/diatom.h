@@ -71,10 +71,15 @@ typedef struct {
 bool diatom_zip_is(const char *path);
 bool diatom_zip_load(const char *path, void **out, size_t *out_len,
                      char *name, size_t name_n);
+/* ChaOS: why the last diatom_zip_load failed, in words for the player
+ * ("its zip is damaged"), or "" */
+extern char diatom_zip_why[96];
 
 /* core.c */
 bool diatom_core_open(diatom_core *c, const char *path);
 bool diatom_core_start(diatom_core *c, const char *rom_path);
+/* ChaOS: why it last failed, in words for the player, or NULL */
+extern const char *diatom_core_why;
 void diatom_core_stop(diatom_core *c);
 
 /* Open once and keep. Returns the same core for the same path, so a repeat

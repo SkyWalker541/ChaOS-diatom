@@ -1621,7 +1621,9 @@ static int run_session_inner(const diatom_session *sn)
 	if (!diatom_core_start(g_core, sn->rom)) {
 		/* Say the firmware was found, so a launcher that reports this does not
 		 * send someone hunting for a BIOS they already have. */
-		if (sn->firmware && *sn->firmware)
+		if (diatom_core_why && *diatom_core_why)   /* ChaOS: a zip it can't open, and why */
+			diatom_proto_send("ERROR\tcode=rom_unreadable\tmsg=%s", diatom_core_why);
+		else if (sn->firmware && *sn->firmware)
 			diatom_proto_send("ERROR\tcode=rom_unreadable"
 			                  "\tmsg=core refused the rom (%s was present)",
 			                  sn->firmware);

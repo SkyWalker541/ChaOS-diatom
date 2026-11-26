@@ -35,6 +35,34 @@ int main(void)
 		      "a .zip still opens as before (%zu bytes)", zn);
 		free(z);
 	}
+	/* A zip made with Zstandard (method 93), as some ROM sets are now: every
+	 * game in them failed with "cannot extract" (2026-11-25) */
+	{
+		unsigned char want[8000];   /* what the fixture holds, made up, nothing copied */
+		size_t wn;
+
+		for (wn = 0; wn < sizeof want; wn++) want[wn] = (unsigned char)((wn * 37 + (wn >> 5)) & 0xff);
+		CHECK(diatom_zip_load("test/fixtures/zstd.zip", &z, &zn, name, sizeof name) && zn == 8000 &&
+		      !memcmp(z, want, 8000) && !strcmp(name, "Homebrew Game (World).sms"),
+		      "a Zstandard zip opens, byte for byte (%zu bytes, %s)", zn, name);
+		free(z); z = NULL;
+	}
+	/* and one damaged inside: refused by the zip's own check, not run */
+	{
+		FILE *f = fopen("test/fixtures/zstd.zip", "rb"), *g;
+		unsigned char buf[4096];
+		size_t bn = f ? fread(buf, 1, sizeof buf, f) : 0;
+
+		if (f) fclose(f);
+		if (bn > 70 && (g = fopen("/tmp/zip_test_bad.zip", "wb"))) {
+			buf[70] ^= 0x5a;    /* a byte of the compressed game */
+			fwrite(buf, 1, bn, g);
+			fclose(g);
+			CHECK(!diatom_zip_load("/tmp/zip_test_bad.zip", &z, &zn, name, sizeof name),
+			      "a damaged Zstandard zip is refused");
+			if (z) { free(z); z = NULL; }
+		}
+	}
 	CHECK(!diatom_zip_load("test/fixtures/none.7z", &d, &n, name, sizeof name),
 	      "a .7z that isn't there is refused");
 	printf(failures ? "FAILED\n" : "all good\n");

@@ -36,6 +36,8 @@ SRC   += shaders/cpu_shader.c shaders/crt/crts.c shaders/lcd/lcd3x.c shaders/sca
 OBJ   := $(SRC:%.c=$(BUILD)/%.o)
 # ChaOS: 7-Zip's C decoder, for .7z games (lib/7z), someone else's C built quietly
 OBJ   += $(BUILD)/lib/7z/chaos_7z.o
+# ChaOS: Zstandard's decoder alone, for zips made with it (lib/zstd, zstd 1.5.6)
+OBJ   += $(BUILD)/lib/zstd/zstddeclib.o
 BIN   := $(BUILD)/diatom
 CONFORM := $(BUILD)/diatom-conform
 
@@ -143,6 +145,10 @@ $(BUILD)/lib/7z/chaos_7z.o: lib/7z/chaos_7z.c lib/7z/sevenz.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -w -c -o $@ $<
 
+$(BUILD)/lib/zstd/zstddeclib.o: lib/zstd/zstddeclib.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -w -c -o $@ $<
+
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -152,7 +158,7 @@ $(BUILD)/%.o: %.c
 # backend exists. Cheap to check, so check it.
 # Mechanical checks, each guarding a rule that decays the moment nothing fails
 # when it is broken: check-seam has held since day one for exactly that reason.
-check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift check-rewind-end check-holddark
+check: check-seam check-cheevos check-proto check-port check-stateplane check-rewind check-cheats check-zip check-save check-ptdrift check-rewind-end check-holddark check-romerror
 
 # The checks that run without SDL, built with AddressSanitizer and
 # UndefinedBehaviorSanitizer into build/asan, so an overrun, a use after free
@@ -184,7 +190,7 @@ check-cheats:
 # ChaOS: a game in a .zip or a .7z, opened as at the start of a game
 check-zip:
 	@mkdir -p $(BUILD)
-	$(CC) -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc -o $(BUILD)/zip_test test/zip_test.c src/zip.c lib/7z/chaos_7z.c -lz -w
+	$(CC) -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc -o $(BUILD)/zip_test test/zip_test.c src/zip.c lib/7z/chaos_7z.c lib/zstd/zstddeclib.c -lz -w
 	@$(BUILD)/zip_test
 
 # ChaOS: PT's drifting light, swapped in whole every 4 frames
@@ -263,6 +269,11 @@ check-proto:
 check-stateplane:
 	$(FRESH_IF_BUILT)
 	@python3 test/stateplane.py
+
+# ChaOS: a game Diatom can't open is said, in words (test/romerror.py)
+check-romerror:
+	$(FRESH_IF_BUILT)
+	@python3 test/romerror.py
 
 # ChaOS: a PlayStation game's black boot frames keep the launcher's
 # "Loading..." up (test/holddark.py)

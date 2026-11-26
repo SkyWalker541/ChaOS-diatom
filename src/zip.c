@@ -10,7 +10,11 @@
  * file archives (cue+bin) ship unzipped for the same reason they do on every
  * other firmware: the cue names its bin by path.
  *
- * A deflated entry goes through zlib; a stored one is copied as it is.
+ * A deflated entry goes through zlib; a stored one is copied as it is; a
+ * Zstandard one (method 93) through zstd's own decoder (lib/zstd). Some ROM
+ * sets are zipped with Zstandard now, and every game in them failed with
+ * "cannot extract" (a tester's Master System, Game Gear, Neo Geo Pocket and
+ * TurboGrafx-16 games, 2026-11-25).
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -21,6 +25,11 @@
 
 #include "diatom.h"
 #include "../lib/7z/sevenz.h"
+#include "../lib/zstd/zstd.h"
+
+#define ZIP_STORED  0
+#define ZIP_DEFLATE 8
+#define ZIP_ZSTD    93
 
 static uint16_t rd16(const unsigned char *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 static uint32_t rd32(const unsigned char *p)
@@ -34,10 +43,14 @@ bool diatom_zip_is(const char *path)
 	return (n > 4 && strcasecmp(path + n - 4, ".zip") == 0) || sevenz_is(path);
 }
 
+char diatom_zip_why[96];
+
 /* Largest entry in the archive, extracted whole. */
 bool diatom_zip_load(const char *path, void **out, size_t *out_len,
                      char *name, size_t name_n)
 {
+	snprintf(diatom_zip_why, sizeof diatom_zip_why, "its %s couldn't be read",
+	         sevenz_is(path) ? ".7z" : "zip");
 	if (sevenz_is(path)) {
 		unsigned char *d = NULL;
 
@@ -46,6 +59,7 @@ bool diatom_zip_load(const char *path, void **out, size_t *out_len,
 			return false;
 		}
 		*out = d;
+		diatom_zip_why[0] = '\0';
 		return true;
 	}
 	FILE *f = fopen(path, "rb");
@@ -54,8 +68,8 @@ bool diatom_zip_load(const char *path, void **out, size_t *out_len,
 	size_t tail_len, i;
 	uint32_t cd_off = 0, cd_n = 0;
 	int found = 0;
-	uint32_t best_usize = 0, best_csize = 0, best_lho = 0;
-	uint16_t best_method = 0;
+	uint32_t best_usize = 0, best_csize = 0, best_lho = 0, best_crc = 0;
+	uint16_t best_method = 0, odd_method = 0;
 	char best_name[512] = "";
 
 	*out = NULL; *out_len = 0;
@@ -83,10 +97,11 @@ bool diatom_zip_load(const char *path, void **out, size_t *out_len,
 	for (i = 0; i < cd_n; i++) {
 		char en[512];
 		uint16_t nlen, elen, clen, method;
-		uint32_t csize, usize, lho;
+		uint32_t csize, usize, lho, crc;
 
 		if (fread(hdr, 1, 46, f) != 46 || rd32(hdr) != 0x02014b50) break;
 		method = rd16(hdr + 10);
+		crc    = rd32(hdr + 16);
 		csize  = rd32(hdr + 20);
 		usize  = rd32(hdr + 24);
 		nlen   = rd16(hdr + 28);
@@ -100,14 +115,26 @@ bool diatom_zip_load(const char *path, void **out, size_t *out_len,
 		fseek(f, elen + clen, SEEK_CUR);
 
 		if (usize == 0 || en[nlen - 1] == '/') continue;        /* directory */
-		if ((method != 0 && method != 8)) continue;             /* stored/deflate only */
+		if (method != ZIP_STORED && method != ZIP_DEFLATE && method != ZIP_ZSTD) {
+			odd_method = method;                            /* said below, if nothing else is */
+			continue;
+		}
 		if (usize > best_usize) {
-			best_usize = usize; best_csize = csize;
+			best_usize = usize; best_csize = csize; best_crc = crc;
 			best_method = method; best_lho = lho;
 			snprintf(best_name, sizeof best_name, "%s", en);
 		}
 	}
-	if (!best_usize) { fclose(f); return false; }
+	if (!best_usize) {
+		if (odd_method) {
+			fprintf(stderr, "diatom: zip: %s is compressed a way Diatom can't read (method %u)\n",
+			        path, odd_method);
+			snprintf(diatom_zip_why, sizeof diatom_zip_why,
+			         "its zip is packed a way ChaOS can't read yet (method %u)", odd_method);
+		}
+		fclose(f);
+		return false;
+	}
 
 	/* The local header repeats the name/extra lengths; the data follows it. */
 	fseek(f, (long)best_lho, SEEK_SET);
@@ -124,8 +151,16 @@ bool diatom_zip_load(const char *path, void **out, size_t *out_len,
 		}
 		fclose(f);
 
-		if (best_method == 0) {
+		if (best_method == ZIP_STORED) {
 			memcpy(un, comp, best_usize);
+		} else if (best_method == ZIP_ZSTD) {
+			size_t got = ZSTD_decompress(un, best_usize, comp, best_csize);
+
+			if (ZSTD_isError(got) || got != best_usize) {
+				fprintf(stderr, "diatom: zip: zstd failed on %s: %s\n", best_name,
+				        ZSTD_isError(got) ? ZSTD_getErrorName(got) : "short");
+				free(comp); free(un); return false;
+			}
 		} else {
 			z_stream z;
 			int rc;
@@ -147,8 +182,17 @@ bool diatom_zip_load(const char *path, void **out, size_t *out_len,
 			}
 		}
 		free(comp);
+		/* The zip's own check, whichever way it was packed: a damaged
+		 * Zstandard entry can decode to the right size and the wrong game */
+		if ((uint32_t)crc32(0L, un, best_usize) != best_crc) {
+			fprintf(stderr, "diatom: zip: %s is damaged (its check doesn't match)\n", best_name);
+			snprintf(diatom_zip_why, sizeof diatom_zip_why, "its zip is damaged");
+			free(un);
+			return false;
+		}
 		*out = un;
 		*out_len = best_usize;
+		diatom_zip_why[0] = '\0';
 		if (name && name_n) snprintf(name, name_n, "%s", best_name);
 		return true;
 	}

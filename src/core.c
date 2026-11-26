@@ -217,8 +217,13 @@ static bool read_file(const char *path, void **out, size_t *len)
 	return true;
 }
 
+/* ChaOS: why diatom_core_start last failed, for the launcher's message, or
+ * NULL for "the core refused it" */
+const char *diatom_core_why;
+
 bool diatom_core_start(diatom_core *c, const char *rom_path)
 {
+	diatom_core_why = NULL;
 	struct retro_system_info si;
 	struct retro_game_info gi;
 	void *data = NULL;
@@ -271,6 +276,7 @@ bool diatom_core_start(diatom_core *c, const char *rom_path)
 
 		if (!diatom_zip_load(rom_path, &data, &len, inner, sizeof inner)) {
 			fprintf(stderr, "diatom: cannot extract %s\n", rom_path);
+			diatom_core_why = diatom_zip_why;
 			return false;
 		}
 		fprintf(stderr, "diatom: zip: %s -> %s (%zu bytes)\n",
