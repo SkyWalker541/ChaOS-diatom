@@ -91,13 +91,20 @@ Scale this to the risk. A typo needs a look; the update system needs all of it.
 3. **Implement** the smallest change that does the job.
 4. **Test.** The checks before every commit; a new check for every bug fixed,
    saying in a comment what broke. A build passing is not a test passing.
+   A change to code many things share is tested against each kind of thing
+   that uses it, not only the one that broke: a check that stands in for
+   one case proves nothing about the others, and an assumption in a comment
+   ("this isn't reached") is tested before it is relied on.
 5. **Adversarial review**, as a separate pass after the work is done: read the
    whole diff as someone trying to reject it. Look for wrong assumptions,
    missed edge cases, error paths, regressions in callers and in the other
    repositories, startup time, memory, disk access, battery, background work
    during games, anything that could reach a log, unsafe file operations, and
    duplicated or dead code. Passing the checks you wrote yourself proves
-   little; try to break it.
+   little; try to break it. For shared code, protocol, settings, saves,
+   update or boot, this review is also done by a separate reviewer (an agent
+   that hasn't seen the work) before the maintainer is asked to test.
+   A log line says only what was checked to be true.
 6. **Clean up** only what the change touched. Larger clean-ups are proposed,
    not done; audits happen when the maintainer asks for one. Never remove
    something for looking unused until you know nothing loads it by name, by
